@@ -1,13 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5b8def"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
+    <linearGradient id="antun-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4257FF"/>
+      <stop offset="0.52" stop-color="#6C5CFF"/>
+      <stop offset="1" stop-color="#12C6D8"/>
+    </linearGradient>
+    <radialGradient id="antun-glow" cx="0.26" cy="0.18" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="antun-a" x1="0.15" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E8F4FF"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="16" fill="url(#g)"/>
-  <path d="M32 12c-8 0-14 6-14 14v6c0 8 6 14 14 14s14-6 14-14v-6c0-8-6-14-14-14z" fill="none" stroke="#fff" stroke-width="3.2"/>
-  <path d="M25 34c2 3 5 4.5 7 4.5s5-1.5 7-4.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
-  <circle cx="27" cy="26" r="2.4" fill="#fff"/>
-  <circle cx="37" cy="26" r="2.4" fill="#fff"/>
+
+  <rect width="1024" height="1024" rx="232" fill="url(#antun-bg)"/>
+  <rect width="1024" height="1024" rx="232" fill="url(#antun-glow)"/>
+
+  <!-- 轨道环：三段弧线留出缺口，暗示隧道与节点环绕 -->
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
+    <path d="M512 168a344 344 0 0 1 326 234" stroke-width="22" stroke-opacity="0.55"/>
+    <path d="M838 610a344 344 0 0 1-262 240" stroke-width="22" stroke-opacity="0.35"/>
+    <path d="M238 398a344 344 0 0 1 96-142" stroke-width="22" stroke-opacity="0.3"/>
+  </g>
+  <circle cx="818" cy="344" r="26" fill="#B8FFF4" fill-opacity="0.95"/>
+  <circle cx="206" cy="642" r="18" fill="#FFFFFF" fill-opacity="0.6"/>
+
+  <!-- 字母 A：两条腿 + 横梁，圆角收口 -->
+  <g fill="none" stroke="url(#antun-a)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 300 350 726" stroke-width="94"/>
+    <path d="M512 300 674 726" stroke-width="94"/>
+    <path d="M424 590h176" stroke-width="78"/>
+  </g>
 </svg>

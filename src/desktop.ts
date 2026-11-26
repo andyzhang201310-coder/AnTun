@@ -70,6 +70,35 @@ export interface RegionOption {
   live: boolean
 }
 
+/** 连接时的网络策略（DNS / 出口 / 地址族） */
+export interface NetOptions {
+  dnsMode: 'preset' | 'custom' | 'off'
+  dnsCustom: string
+  dnsGuard: boolean
+  ipFamily: 'v4' | 'v6' | 'dual'
+  subExit: 'warp' | 'node'
+  subViaWarp: boolean
+}
+
+export interface DiagItem {
+  name: string
+  ok: boolean
+  status: number
+  detail: string
+}
+
+export interface DiagReport {
+  ok: boolean
+  kind: 'dns' | 'ai' | string
+  summary: string
+  exitIp: string
+  exitCountry: string
+  resolverIp: string
+  resolverGeo: string
+  leak: boolean
+  items: DiagItem[]
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown
@@ -86,7 +115,7 @@ declare global {
       quit: () => Promise<void>
       onQuitRequest: (cb: () => void) => void
       // 真实连接核心
-      coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string) => Promise<CoreResult>
+      coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string, net?: NetOptions) => Promise<CoreResult>
       coreStop: () => Promise<void>
       coreStatus: () => Promise<boolean>
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
@@ -97,6 +126,7 @@ declare global {
       coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
       psiphonRegions: () => Promise<RegionOption[]>
       setPsiphonRegion: (code: string) => Promise<void>
+      netDiagnose: (port: number, kind: 'dns' | 'ai') => Promise<DiagReport>
     }
     _antunSyncTray?: () => void
   }
@@ -129,8 +159,16 @@ export function initDesktopBridge() {
       quitCallback = cb
     },
     // 真实核心链路
-    coreConnect: (cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig) =>
-      invoke<CoreResult>('core_connect', { cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig }),
+    coreConnect: (cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig, net) =>
+      invoke<CoreResult>('core_connect', {
+        cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig,
+        dnsMode: net?.dnsMode ?? 'preset',
+        dnsCustom: net?.dnsCustom ?? '',
+        dnsGuard: net?.dnsGuard ?? true,
+        ipFamily: net?.ipFamily ?? 'v4',
+        subExit: net?.subExit ?? 'warp',
+        subViaWarp: net?.subViaWarp ?? false,
+      }),
     coreStop: () => invoke<void>('core_stop'),
     coreStatus: () => invoke<boolean>('core_status'),
     coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
@@ -141,5 +179,6 @@ export function initDesktopBridge() {
     coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
     psiphonRegions: () => invoke<RegionOption[]>('psiphon_regions'),
     setPsiphonRegion: (code) => invoke<void>('set_psiphon_region', { region: code }),
+    netDiagnose: (port, kind) => invoke<DiagReport>('net_diagnose', { port, kind }),
   }
 }

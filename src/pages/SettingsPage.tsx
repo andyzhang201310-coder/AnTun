@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, Download, RefreshCw } from 'lucide-react'
+import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, Download, RefreshCw, Activity, ShieldCheck } from 'lucide-react'
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
 import { parseWarpCredential } from '../engine/credential'
-import type { CoreComponentStatus, CoreUpdateStatus, RegionOption } from '../desktop'
+import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
@@ -18,6 +18,8 @@ export function SettingsPage() {
   const [coreMsg, setCoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [regions, setRegions] = useState<RegionOption[]>([])
   const [regionMsg, setRegionMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [diag, setDiag] = useState<DiagReport | null>(null)
+  const [diagBusy, setDiagBusy] = useState<'dns' | 'ai' | null>(null)
   const isDesk = !!(window as any).AnTunDesktop?.isDesktop
 
   const loadCoreStatus = async () => {
@@ -78,6 +80,22 @@ export function SettingsPage() {
       store.log('INFO', `psiphon egress region -> ${code || 'auto'}`)
     } catch (e: any) {
       setRegionMsg({ ok: false, text: t('regionSaveFail', { msg: e?.message || String(e) }) })
+    }
+  }
+
+  const runDiag = async (kind: 'dns' | 'ai') => {
+    const desk = (window as any).AnTunDesktop
+    if (!desk?.netDiagnose) return
+    setDiagBusy(kind)
+    setDiag(null)
+    try {
+      const report = await desk.netDiagnose(store.settings.mixedPort, kind) as DiagReport
+      setDiag(report)
+      store.log(report.ok ? 'INFO' : 'WARN', `diagnose ${kind}: ${report.summary}`)
+    } catch (e: any) {
+      setDiag({ ok: false, kind, summary: t('diagFail', { msg: e?.message || String(e) }), exitIp: '', exitCountry: '', resolverIp: '', resolverGeo: '', leak: false, items: [] })
+    } finally {
+      setDiagBusy(null)
     }
   }
 
@@ -270,7 +288,7 @@ export function SettingsPage() {
               placeholder="8.8.8.8, 1.1.1.1" style={{ width: 200 }} />
           } />
         )}
-        <FieldRow title={t('dnsLeak')} desc={t('dnsLeak')} control={
+        <FieldRow title={t('dnsLeak')} desc={t('dnsLeakDesc')} control={
           <Toggle checked={s.dnsLeak} onChange={(v) => store.setSetting('dnsLeak', v)} />
         } />
         <FieldRow title={t('psiphon')} desc={t('psiphonDesc')} control={
@@ -301,6 +319,58 @@ export function SettingsPage() {
               </div>
             )}
           </>
+        )}
+      </Card>
+
+      {/* 网络诊断 */}
+      <Card title={<><Activity size={16} />{t('diagTitle')}</>} sub={t('diagDesc')}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={!isDesk || !store.conn.connected || diagBusy !== null}
+            onClick={() => runDiag('dns')}
+          >
+            <ShieldCheck size={14} />{diagBusy === 'dns' ? t('diagRunning') : t('diagDns')}
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={!isDesk || !store.conn.connected || diagBusy !== null}
+            onClick={() => runDiag('ai')}
+          >
+            <Activity size={14} />{diagBusy === 'ai' ? t('diagRunning') : t('diagAi')}
+          </button>
+          {!store.conn.connected && (
+            <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>{t('diagNeedConn')}</span>
+          )}
+        </div>
+
+        {diag && (
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5, lineHeight: 1.6, color: diag.ok ? 'var(--success)' : 'var(--danger)' }}>
+              {diag.ok ? <Check size={15} style={{ flex: 'none', marginTop: 2 }} /> : <AlertCircle size={15} style={{ flex: 'none', marginTop: 2 }} />}
+              <span>{diag.summary}</span>
+            </div>
+            {(diag.exitIp || diag.resolverIp) && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                {diag.exitIp && <span>{t('diagExit')}: <span className="mono">{diag.exitIp}</span> {diag.exitCountry}</span>}
+                {diag.resolverIp && <span>{t('diagResolver')}: <span className="mono">{diag.resolverIp}</span> {diag.resolverGeo}</span>}
+              </div>
+            )}
+            {diag.items.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {diag.items.map((it) => (
+                  <div key={it.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                    <span style={{
+                      width: 7, height: 7, borderRadius: 99, flex: 'none',
+                      background: it.ok ? 'var(--success)' : 'var(--danger)',
+                    }} />
+                    <span style={{ fontWeight: 600, minWidth: 96 }}>{it.name}</span>
+                    <span className="muted" style={{ fontSize: 11.5 }}>{it.detail}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </Card>
 

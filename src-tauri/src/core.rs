@@ -446,6 +446,46 @@ fn masque_proxy(name: &str, cred: &WarpCredential, mtu: u16, network_h2: bool, d
     s
 }
 
+/// 构建 DNS 段。
+/// preset 使用 IP 形式的 DoH（无需本地引导解析），配合 respect-rules 让解析走隧道；
+/// guard 开启 fake-ip，浏览器只把域名交给核心，避免系统 DNS 明文外泄。
+fn render_dns(dns_mode: &str, dns_custom: &str, guard: bool, ipv6: bool) -> String {
+    if dns_mode == "off" {
+        return String::new();
+    }
+    let mut servers: Vec<String> = if dns_mode == "custom" {
+        dns_custom
+            .split(|c| c == ',' || c == '\n' || c == '\r' || c == ' ' || c == ';')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        vec![
+            "https://1.1.1.1/dns-query".to_string(),
+            "https://8.8.8.8/dns-query".to_string(),
+        ]
+    };
+    if servers.is_empty() {
+        servers.push("https://1.1.1.1/dns-query".to_string());
+    }
+
+    let mut s = String::from("dns:\n  enable: true\n");
+    s.push_str(&format!("  ipv6: {}\n", ipv6));
+    s.push_str("  respect-rules: true\n");
+    s.push_str("  default-nameserver:\n    - 1.1.1.1\n    - 8.8.8.8\n");
+    s.push_str("  proxy-server-nameserver:\n    - 8.8.8.8\n    - 1.1.1.1\n");
+    if guard {
+        s.push_str(
+            "  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  fake-ip-filter:\n    - '*.lan'\n    - '*.local'\n    - '+.msftconnecttest.com'\n    - '+.msftncsi.com'\n    - 'localhost.ptlogin2.qq.com'\n",
+        );
+    }
+    s.push_str("  nameserver:\n");
+    for d in servers {
+        s.push_str(&format!("    - {}\n", d));
+    }
+    s
+}
+
 /// 渲染 mihomo 配置：支持 WG / AWG / GOOL / MASQUE H3 / H2 / in-MASQUE。
 /// 不依赖 GEOSITE/GEOIP 数据文件，避免首次下载失败。
 fn render_config(
@@ -456,12 +496,27 @@ fn render_config(
     mtu: u16,
     allow_lan: bool,
     front_config: Option<&str>,
+    dns_mode: &str,
+    dns_custom: &str,
+    dns_guard: bool,
+    ip_family: &str,
+    sub_exit: &str,
+    sub_via_warp: bool,
 ) -> String {
     let effective_mtu = if mtu > 0 { mtu } else { 1280 };
     let allow_lan_str = if allow_lan { "true" } else { "false" };
-    // 订阅模式的节点固定命名为 SUB-NODE，作为最外层 dialer-proxy
-    let front_name = front_config.map(|_| "SUB-NODE");
-    let (mut proxies, outbound) = match protocol {
+    let ipv6 = ip_family != "v4";
+    let dns_block = render_dns(dns_mode, dns_custom, dns_guard, ipv6);
+    let dns_rules = if dns_block.is_empty() {
+        String::new()
+    } else {
+        String::from("  - IP-CIDR,1.1.1.1/32,PROXY\n  - IP-CIDR,8.8.8.8/32,PROXY\n")
+    };
+    // 订阅节点作为最终出口时，WARP 只作为前置（可选）
+    let node_exit = front_config.is_some() && sub_exit == "node";
+    // 订阅模式的节点固定命名为 SUB-NODE：WARP 出口时作为最外层 dialer-proxy，节点出口时即最终出站
+    let front_name = front_config.filter(|_| !node_exit).map(|_| "SUB-NODE");
+    let (mut proxies, mut outbound) = match protocol {
         // GOOL = XEHN 的 wwarp：两层 WARP 隧道，内层通过 dialer-proxy 走外层
         "gool" => (
             format!(
@@ -498,7 +553,18 @@ fn render_config(
     };
 
     if let Some(front) = front_config {
-        proxies = format!("{}\n{}", front.trim_end(), proxies);
+        if node_exit {
+            // 节点作为最终出口：SUB-NODE 直接出站，可选让 WARP 承载节点流量
+            let mut node_cfg = front.trim_end().to_string();
+            if sub_via_warp {
+                node_cfg.push_str("\n    dialer-proxy: \"WARP\"");
+            }
+            node_cfg.push('\n');
+            proxies = format!("{}{}", proxies, node_cfg);
+            outbound = "SUB-NODE";
+        } else {
+            proxies = format!("{}\n{}", front.trim_end(), proxies);
+        }
     }
 
     format!(
@@ -508,23 +574,12 @@ bind-address: 127.0.0.1
 allow-lan: {allow_lan_str}
 mode: rule
 log-level: info
-ipv6: false
+ipv6: {ipv6}
 external-controller: 127.0.0.1:{api_port}
 tcp-concurrent: true
+unified-delay: true
 
-dns:
-  enable: true
-  ipv6: false
-  respect-rules: true
-  proxy-server-nameserver:
-    - 8.8.8.8
-    - 1.1.1.1
-    - 1.0.0.1
-  nameserver:
-    - 8.8.8.8
-    - 1.1.1.1
-    - 1.0.0.1
-
+{dns_block}
 proxies:
 {proxies}
 proxy-groups:
@@ -534,7 +589,7 @@ proxy-groups:
       - {outbound}
 
 rules:
-  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+{dns_rules}  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
   - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
@@ -545,6 +600,9 @@ rules:
         protocol = protocol,
         port = port,
         api_port = api_port,
+        ipv6 = ipv6,
+        dns_block = dns_block,
+        dns_rules = dns_rules,
         proxies = proxies,
         outbound = outbound,
         allow_lan_str = allow_lan_str,
@@ -672,8 +730,20 @@ pub async fn core_connect(
     timeout_sec: u32,
     allow_lan: bool,
     front_config: Option<String>,
+    dns_mode: Option<String>,
+    dns_custom: Option<String>,
+    dns_guard: Option<bool>,
+    ip_family: Option<String>,
+    sub_exit: Option<String>,
+    sub_via_warp: Option<bool>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
+    let dns_mode = dns_mode.unwrap_or_else(|| "preset".into());
+    let dns_custom = dns_custom.unwrap_or_default();
+    let dns_guard = dns_guard.unwrap_or(true);
+    let ip_family = ip_family.unwrap_or_else(|| "v4".into());
+    let sub_exit = sub_exit.unwrap_or_else(|| "warp".into());
+    let sub_via_warp = sub_via_warp.unwrap_or(false);
     // 1. 先把之前的核心停掉并还原系统代理，避免端口冲突与旧代理残留
     stop_child(&state);
     let _ = restore_system_proxy(&app);
@@ -686,7 +756,21 @@ pub async fn core_connect(
     ensure_bundled_extras(&app);
 
     // 3. 写配置
-    let cfg = render_config(&cred, &protocol, port, api_port, mtu, allow_lan, front_config.as_deref());
+    let cfg = render_config(
+        &cred,
+        &protocol,
+        port,
+        api_port,
+        mtu,
+        allow_lan,
+        front_config.as_deref(),
+        &dns_mode,
+        &dns_custom,
+        dns_guard,
+        &ip_family,
+        &sub_exit,
+        sub_via_warp,
+    );
     let cfg_path = match config_path(&app) {
         Ok(p) => p,
         Err(e) => return Ok(CoreResult::fail(e)),
@@ -859,5 +943,62 @@ pub async fn probe_status(
     match probe_exit(&proxy_url) {
         Ok(r) => Ok(r),
         Err(e) => Ok(CoreResult::fail(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with(dns_mode: &str, guard: bool, sub_exit: &str, sub_via_warp: bool) -> String {
+        let cred = builtin_credential();
+        let front = "  - name: \"SUB-NODE\"\n    type: ss\n    server: 1.2.3.4\n    port: 8388";
+        render_config(
+            &cred,
+            "wg",
+            7890,
+            9090,
+            1280,
+            false,
+            Some(front),
+            dns_mode,
+            "",
+            guard,
+            "v4",
+            sub_exit,
+            sub_via_warp,
+        )
+    }
+
+    #[test]
+    fn dns_guard_uses_fake_ip_and_doh() {
+        let cfg = cfg_with("preset", true, "warp", false);
+        assert!(cfg.contains("enhanced-mode: fake-ip"));
+        assert!(cfg.contains("https://1.1.1.1/dns-query"));
+        assert!(cfg.contains("ipv6: false"));
+        assert!(cfg.contains("IP-CIDR,1.1.1.1/32,PROXY"));
+    }
+
+    #[test]
+    fn dns_off_removes_dns_block() {
+        let cfg = cfg_with("off", true, "warp", false);
+        assert!(!cfg.contains("\ndns:/n"));
+        assert!(!cfg.contains("IP-CIDR,1.1.1.1/32,PROXY"));
+    }
+
+    #[test]
+    fn node_exit_turns_node_into_final_outbound() {
+        let cfg = cfg_with("preset", true, "node", true);
+        // WARP 不再以节点为前置，改为承载节点流量
+        assert!(!cfg.contains("dialer-proxy: \"SUB-NODE\""));
+        assert!(cfg.contains("dialer-proxy: \"WARP\""));
+        assert!(cfg.contains("      - SUB-NODE"));
+    }
+
+    #[test]
+    fn warp_exit_keeps_node_as_front() {
+        let cfg = cfg_with("preset", true, "warp", false);
+        assert!(cfg.contains("dialer-proxy: \"SUB-NODE\""));
+        assert!(cfg.contains("      - WARP"));
     }
 }

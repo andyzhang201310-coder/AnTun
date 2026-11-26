@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Layers, Link2, RefreshCw, Trash2, Check, AlertCircle, ArrowRight } from 'lucide-react'
 import { useStore, newId } from '../store'
 import { tr } from '../i18n'
-import { Card, Segment } from '../components/ui'
+import { Card, Segment, Toggle, FieldRow } from '../components/ui'
 import type { Subscription } from '../types'
 
 export function ModesPage() {
@@ -102,6 +102,26 @@ export function ModesPage() {
                 </span>
               )}
             </div>
+          </Card>
+
+          <Card
+            title={<><ArrowRight size={16} />{t('subExitTitle')}</>}
+            sub={s.subExit === 'node' ? t('subExitDescNode') : t('subExitDescWarp')}
+          >
+            <Segment
+              value={s.subExit}
+              onChange={(v) => store.setSetting('subExit', v)}
+              options={[
+                { value: 'node', label: t('subExitNode') },
+                { value: 'warp', label: t('subExitWarp') },
+              ]}
+            />
+            {s.subExit === 'node' && (
+              <FieldRow title={t('subViaWarp')} desc={t('subViaWarpDesc')} control={
+                <Toggle checked={s.subViaWarp} onChange={(v) => store.setSetting('subViaWarp', v)} />
+              } />
+            )}
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>{t('subExitApply')}</div>
           </Card>
 
           <Card title={<><RefreshCw size={16} />{t('subscriptionList')}</>} sub={t('totalNodes', { n: subNodes.length })}>

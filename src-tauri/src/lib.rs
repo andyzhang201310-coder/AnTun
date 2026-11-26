@@ -1,5 +1,6 @@
 mod core;
 mod core_update;
+mod net_diag;
 mod psiphon;
 mod subscription;
 
@@ -113,7 +114,8 @@ pub fn run() {
             core_update::core_update_status,
             core_update::core_update,
             psiphon::psiphon_regions,
-            psiphon::set_psiphon_region
+            psiphon::set_psiphon_region,
+            net_diag::net_diagnose
         ])
         .setup(|app| {
             // 上次异常退出若留下代理快照，先还原，避免系统代理指向已死的本地端口

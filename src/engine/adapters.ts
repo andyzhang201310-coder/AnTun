@@ -127,6 +127,14 @@ export class DesktopAdapter implements EngineAdapter {
       opts.settings.timeoutSec,
       opts.settings.allowLan,
       opts.frontConfig,
+      {
+        dnsMode: opts.settings.dnsMode,
+        dnsCustom: opts.settings.dnsCustom,
+        dnsGuard: opts.settings.dnsLeak,
+        ipFamily: opts.settings.ipFamily,
+        subExit: opts.settings.subExit ?? 'warp',
+        subViaWarp: opts.settings.subViaWarp ?? false,
+      },
     ) as CoreResult
 
     if (!result.ok) {

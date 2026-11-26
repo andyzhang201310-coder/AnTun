@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { createAdapter } from './adapters'
+import { initDesktopBridge } from '../desktop'
 import type { EngineAdapter, ConnectOptions } from '../types'
 import { tr } from '../i18n'
 
@@ -20,19 +21,39 @@ export function useEngine() {
 
   // 平台检测 & 适配器创建
   useEffect(() => {
-    const ua = navigator.userAgent
-    let platform: 'android' | 'windows' | 'tv' | 'web' = 'web'
-    if (/Android/i.test(ua)) platform = /TV|Android TV|SMART-TV/i.test(ua) ? 'tv' : 'android'
-    else if (/Windows/i.test(ua)) platform = 'windows'
-    else if (/TV|SmartTV|HbbTV/i.test(ua)) platform = 'tv'
-    // 桌面壳环境（Tauri）：平台固定为 windows，并暴露原生能力
-    const desk = (window as any).AnTunDesktop
-    if (desk?.isDesktop) platform = 'windows'
-    store.setPlatform(platform)
-    adapterRef.current = createAdapter(platform, store.settings.apiPort, store.settings.mixedPort)
-    store.log('INFO', `${tr('diagPlatform', store.settings.lang)}: ${platform} · ${adapterRef.current.name}`)
-    // 托盘状态同步
-    ;(window as any)._antunSyncTray = () => desk?.notifyStatus?.(useStore.getState().conn.connected)
+    let cancelled = false
+    let timer: number | undefined
+    let tries = 0
+
+    const boot = () => {
+      if (cancelled) return
+      // Tauri 的 IPC 注入可能晚于首帧，重新尝试注入桥接，避免误判为纯 Web 环境
+      if (!(window as any).AnTunDesktop) initDesktopBridge()
+      const ua = navigator.userAgent
+      let platform: 'android' | 'windows' | 'tv' | 'web' = 'web'
+      if (/Android/i.test(ua)) platform = /TV|Android TV|SMART-TV/i.test(ua) ? 'tv' : 'android'
+      else if (/Windows/i.test(ua)) platform = 'windows'
+      else if (/TV|SmartTV|HbbTV/i.test(ua)) platform = 'tv'
+      // 桌面壳环境（Tauri）：平台固定为 windows，并暴露原生能力
+      const desk = (window as any).AnTunDesktop
+      if (desk?.isDesktop) platform = 'windows'
+      if (platform === 'web' && tries < 6) {
+        tries++
+        timer = window.setTimeout(boot, 250)
+        return
+      }
+      store.setPlatform(platform)
+      adapterRef.current = createAdapter(platform, store.settings.apiPort, store.settings.mixedPort)
+      store.log('INFO', `${tr('diagPlatform', store.settings.lang)}: ${platform} · ${adapterRef.current.name}`)
+      // 托盘状态同步
+      ;(window as any)._antunSyncTray = () => desk?.notifyStatus?.(useStore.getState().conn.connected)
+    }
+
+    boot()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
     // 仅在挂载时检测一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

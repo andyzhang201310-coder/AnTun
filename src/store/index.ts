@@ -29,6 +29,8 @@ const DEFAULT_SETTINGS: Settings = {
   dnsMode: 'preset',
   dnsCustom: '',
   dnsLeak: true,
+  subExit: 'node',
+  subViaWarp: false,
   proxyMode: 'custom',
   domainDirect: '',
   domainProxy: '',
@@ -162,6 +164,15 @@ export const useStore = create<AppStore>()(
     }),
     {
       name: 'antun-prefs',
+      // 老版本存档缺少新增设置项：用默认值补齐，避免新功能读到 undefined
+      merge: (persisted, current) => {
+        const saved = (persisted || {}) as Partial<typeof current>
+        return {
+          ...current,
+          ...saved,
+          settings: { ...current.settings, ...(saved.settings || {}) },
+        }
+      },
       partialize: (s) => ({
         settings: s.settings,
         page: s.page,

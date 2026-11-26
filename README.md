@@ -31,13 +31,12 @@ AnTun 采用 **Web 技术栈一次开发、多端复用**：界面与逻辑只�
 
 - **首页**：唯一的连接圆环（点击连接/断开，会话时钟 / 动画进度）、扫描端点、协议下拉框（盾牌图标 + 当前协议 + 可用状态，支持 WireGuard / AWG / GOOL / MASQUE H3 / MASQUE H2 / MASQUE in MASQUE）、连接选项、出口 IP/国家/机房/延迟、带当前毫秒数的实时延迟曲线、真实上下行速率与累计流量、国家/Colo 过滤、缓存端点锁定。重复的“连接”按钮已移除，窄窗口下连接区自动堆叠。
 - **顶栏**：主题与语言改为图标按钮，单击分别切换浅色/深色与中文/英文，保留悬停提示与 TV 焦点样式。
-- **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点，选中的订阅节点作为 WARP 隧道的前置代理（`dialer-proxy`）。
+- **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点。订阅出口可选 **WARP 出口**（节点前置，最终 IP 仍是共享 WARP）或 **节点出口**（节点直接出站，可选让 WARP 承载节点流量），后者用于访问 ChatGPT / Gemini 等对 WARP 共享 IP 风控严格的站点。
 - **节点**：端点扫描（2 阶段探测）、搜索、协议过滤、按延迟/丢包/机房排序、点击锁定端点。
 - **规则**：代理模式（自定义 / 绕过大陆 / 全局）、规则增删启停、直连/代理域名清单。
-- **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为（开机自启 / 启动即连接已接原生行为）、DNS 与出口（Psiphon 出口地区采用 XEHN 兼容的“自动选择 + ISO 国家码”列表，选择后写入 `EgressRegion`；链式协议下禁用），全部设置项持久化到本机。
+- **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为、DNS 与出口（DNS 预设 / 自定义 / 关闭 + **DNS 防泄漏**：fake-ip 与 IP 形式 DoH 经隧道解析；Psiphon 出口地区采用 XEHN 兼容的“自动选择 + ISO 国家码”列表，选择后写入 `EgressRegion`）、**网络诊断**（DNS 泄漏检测 + ChatGPT / Gemini / Claude 站点连通性检测），全部设置项持久化到本机。
 - **关于**：仅保留品牌、简介与 AnTun 项目主页；已移除版本/路径/许可证卡片、参考项目链接与控制码。
 - **日志**：运行日志、连接历史、可复制的诊断信息。
-- **关于**：AnTun 真实版本、程序/资源/数据路径、控制码、MIT 代码许可证与内置核心 GPL-3.0 说明、参考项目与核心源码链接。
 - 浅色 / 深色 / 跟随系统主题，中文 / English 双语，手机 / 桌面 / TV 三档响应式布局，TV 遥控器焦点态。
 
 ## 工程结构（快速开发）
@@ -74,7 +73,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.4.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.5.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -96,6 +95,16 @@ src-tauri/           Tauri 桌面壳
 
 六种协议已通过 `scripts/verify-protocols.cjs` 逐项真实连接验证：**WireGuard、AWG、GOOL、MASQUE H3、MASQUE in MASQUE** 均拿到 `warp=on` 的真实出口 IP；**MASQUE H2** 在当前网络下不可用——用 XEHN 自身执行 `connect -p masque-h2` 同样返回 `no working endpoint found`（14 个端点全部失败），AnTun 如实显示连接失败，不会用 H3 冒充 H2。连接等待下限已提高到 30 秒，避免 gvisor 握手被误判超时。
 
+### 访问 ChatGPT / Gemini
+
+OpenAI 与 Google 对**机房/VPN 共享 IP** 有独立风控，能否访问取决于「最终出口 IP」，而不是隧道是否通：
+
+1. **纯 WARP 模式**：Cloudflare WARP 的共享出口常被判为不支持地区，ChatGPT 多为 403、Gemini 可能可用。可在「设置 → 网络诊断 → AI 站点连通性」一键确认当前出口的实际结果。
+2. **订阅模式 → 节点出口（推荐）**：在「模式」页把**订阅出口**切成「节点出口」，导入一个位于美国 / 日本 / 新加坡的节点并选中，节点即成为最终出口；WARP 共享 IP 不再参与，ChatGPT / Gemini 通常可直接打开。若该节点本身被墙，可再打开「节点流量经 WARP 承载」，先入 WARP 再连节点。
+3. **DNS 必须不泄漏**：设置页保持「DNS 防泄漏」开启（默认开启），核心会使用 fake-ip + IP 形式的 DoH 并在隧道内解析；此时解析器位于 Cloudflare / Google 侧，本地运营商看不到访问域名。用「DNS 泄漏检测」可直接看到解析器 IP 与归属地。
+
+实测（WARP 出口，`scripts/verify-net-1_5.cjs`）：DNS 解析器为 `172.70.141.36 · Singapore - Cloudflare`，无泄漏；ChatGPT 网页与 Gemini 网页在该出口下 HTTP 403/200，OpenAI API 返回地区拦截——这正是需要切「节点出口」的典型场景。
+
 ```bash
 npm run tauri:dev       # 开发模式
 npm run tauri:build     # 构建安装包（输出到 src-tauri/target/release/bundle/nsis/）
@@ -112,7 +121,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；关于页不再展示版本，脚本会自动跳过该处替换。当前版本：**1.4.0**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；关于页不再展示版本，脚本会自动跳过该处替换。当前版本：**1.5.0**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml
@@ -122,7 +131,7 @@ npm run version:set -- 1.3.0   # 指定版本
 > registry = "sparse+https://rsproxy.cn/index/"
 > ```
 
-验证方式：启动 exe 前设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`，再运行 `node scripts/verify-tauri.cjs` 做基础交互验证，`node scripts/verify-protocols.cjs` 逐项验证六种协议的真实出口，或 `node scripts/verify-updates.cjs` 验证首页按钮、订阅导入与关于页信息（需先在本机 8899 端口提供 `scripts/fixtures/test-subscription.yaml`）；`node scripts/verify-latency-region-1_4.cjs` 验证实时延迟数值与 Psiphon 出口地区写入，`node scripts/verify-latency-1_4.cjs` 验证连接后波形图上的毫秒数。
+验证方式：启动 exe 前设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`，再运行 `node scripts/verify-tauri.cjs` 做基础交互验证，`node scripts/verify-protocols.cjs` 逐项验证六种协议的真实出口，或 `node scripts/verify-updates.cjs` 验证首页按钮、订阅导入与关于页信息（需先在本机 8899 端口提供 `scripts/fixtures/test-subscription.yaml`）；`node scripts/verify-latency-region-1_4.cjs` 验证实时延迟数值与 Psiphon 出口地区写入，`node scripts/verify-latency-1_4.cjs` 验证连接后波形图上的毫秒数，`node scripts/verify-net-1_5.cjs` 验证 DNS 防泄漏落盘配置、DNS 泄漏检测与 AI 站点连通性。
 
 ## 开发命令
 

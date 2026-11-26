@@ -1,8 +1,9 @@
-import { Home, Layers, Server, ShieldCheck, Settings, ScrollText, Info, Power, Wifi, WifiOff, Monitor, Smartphone, Tv, Globe } from 'lucide-react'
+import { Home, Layers, Server, ShieldCheck, Settings, ScrollText, Info, Wifi, WifiOff, Monitor, Smartphone, Tv, Globe } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { PageId, Platform } from '../types'
 import { useStore } from '../store'
 import { tr } from '../i18n'
+import { BrandMark } from './BrandMark'
 
 const NAV: { id: PageId; key: string; icon: typeof Home }[] = [
   { id: 'home', key: 'navHome', icon: Home },
@@ -33,11 +34,7 @@ export function Sidebar() {
         background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '22px 14px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '0 10px 22px' }}>
-          <div style={{
-            width: 38, height: 38, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'linear-gradient(135deg, var(--brand), var(--brand-2))', color: '#fff',
-            boxShadow: '0 6px 16px rgba(91,110,245,.35)',
-          }}><Power size={20} strokeWidth={2.4} /></div>
+          <BrandMark size={38} />
           <div>
             <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-.5px' }}>{t('appName')}</div>
             <div className="muted" style={{ fontSize: 10, marginTop: 1 }}>{t('appTagline')}</div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Sidebar, TopBar } from './components/Shell'
 import { ThemeLangControls } from './components/ui'
+import { BrandMark } from './components/BrandMark'
 import { HomePage } from './pages/HomePage'
 import { ModesPage } from './pages/ModesPage'
 import { NodesPage } from './pages/NodesPage'
@@ -73,10 +74,9 @@ export default function App() {
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, backdropFilter: 'blur(4px)',
         }}>
           <div className="card fade-in" style={{ maxWidth: 420, width: '100%', textAlign: 'center', padding: 30 }}>
-            <div style={{
-              width: 54, height: 54, borderRadius: 16, margin: '0 auto 16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'linear-gradient(135deg, var(--brand), var(--brand-2))', color: '#fff', fontSize: 26, fontWeight: 800,
-            }}>A</div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              <BrandMark size={58} />
+            </div>
             <h2 style={{ margin: '0 0 6px', fontSize: 20 }}>AnTun</h2>
             <div className="muted" style={{ fontSize: 12, marginBottom: 18 }}>{t('appTagline')}</div>
             <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-2)', background: 'var(--surface-2)', padding: 14, borderRadius: 12 }}>

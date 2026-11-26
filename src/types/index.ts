@@ -83,7 +83,12 @@ export interface Settings {
   endpointRank: 'ping' | 'loss' | 'colo'
   dnsMode: 'preset' | 'custom' | 'off'
   dnsCustom: string
+  /** DNS 防泄漏：fake-ip + DoH 经隧道解析，避免系统 DNS 明文外泄 */
   dnsLeak: boolean
+  /** 订阅模式出口：warp = 节点前置、WARP 出口；node = 节点直接出站 */
+  subExit: 'warp' | 'node'
+  /** 节点出口时是否让 WARP 承载节点流量（前置隧道） */
+  subViaWarp: boolean
   proxyMode: 'custom' | 'bypass-mainland' | 'global'
   domainDirect: string
   domainProxy: string
