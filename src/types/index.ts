@@ -53,6 +53,8 @@ export interface ConnState {
   latency: number
   up: number           // bytes
   down: number         // bytes
+  upRate: number       // bytes per second
+  downRate: number     // bytes per second
   startedAt: number | null
   session: string      // 例如 "AWG" / "AWG-Psiphon"
 }
@@ -134,6 +136,7 @@ export interface EngineAdapter {
   status(): Promise<ConnState>
   probe(onPoint: (p: LatencyPoint) => void): void
   stopProbe(): void
+  traffic?(): Promise<{ up: number; down: number; upRate?: number; downRate?: number }>
 }
 
 export interface ConnectOptions {

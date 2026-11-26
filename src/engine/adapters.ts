@@ -94,10 +94,12 @@ export class DesktopAdapter implements EngineAdapter {
   readonly name = 'AnTun Core'
   private probeTimer: ReturnType<typeof setInterval> | null = null
   private port: number
+  private apiPort: number
   private connected = false
 
-  constructor(port: number, _apiPort: number) {
+  constructor(port: number, apiPort: number) {
     this.port = port
+    this.apiPort = apiPort
   }
 
   private get desk() {
@@ -144,6 +146,8 @@ export class DesktopAdapter implements EngineAdapter {
       latency: result.latency,
       up: 0,
       down: 0,
+      upRate: 0,
+      downRate: 0,
       startedAt: Date.now(),
       session: opts.frontConfig
         ? `${opts.protocol.toUpperCase()} · 订阅前置`
@@ -170,7 +174,7 @@ export class DesktopAdapter implements EngineAdapter {
       colo: r.colo,
       city: r.city,
       latency: r.latency,
-      up: 0, down: 0, startedAt: null, session: 'WARP',
+      up: 0, down: 0, upRate: 0, downRate: 0, startedAt: null, session: 'WARP',
     }
   }
 
@@ -188,6 +192,16 @@ export class DesktopAdapter implements EngineAdapter {
         }
       } catch { /* 探测异常时保留状态，下轮再试 */ }
     }, 5000)
+  }
+
+  async traffic(): Promise<{ up: number; down: number; upRate: number; downRate: number }> {
+    const r = await this.desk.coreTraffic(this.apiPort)
+    return {
+      up: Number(r.upTotal) || 0,
+      down: Number(r.downTotal) || 0,
+      upRate: Number(r.up) || 0,
+      downRate: Number(r.down) || 0,
+    }
   }
 
   stopProbe(): void {
@@ -214,13 +228,15 @@ export class AndroidAdapter implements EngineAdapter {
   async connect(opts: ConnectOptions): Promise<ConnState> {
     if (!this.bridge) throw new Error('Android VpnService 桥接不可用')
     const s = await this.bridge.connect(JSON.stringify(opts))
-    return typeof s === 'string' ? JSON.parse(s) : s
+    const state = typeof s === 'string' ? JSON.parse(s) : s
+    return { ...state, upRate: state.upRate ?? 0, downRate: state.downRate ?? 0 }
   }
   async disconnect() { this.stopProbe(); if (this.bridge) await this.bridge.disconnect() }
   async status(): Promise<ConnState> {
     if (!this.bridge) throw new Error('no bridge')
     const s = await this.bridge.status()
-    return typeof s === 'string' ? JSON.parse(s) : s
+    const state = typeof s === 'string' ? JSON.parse(s) : s
+    return { ...state, upRate: state.upRate ?? 0, downRate: state.downRate ?? 0 }
   }
   probe(onPoint: (p: LatencyPoint) => void) {
     this.stopProbe()
@@ -279,11 +295,20 @@ export class CoreRestAdapter implements EngineAdapter {
     return {
       connected: true, connecting: false, protocol: 'awg', endpoint: null,
       exitIp: data.query, country: data.country, colo: 'WARP', city: data.city,
-      latency: 0, up: 0, down: 0, startedAt: Date.now(), session: 'WARP',
+      latency: 0, up: 0, down: 0, upRate: 0, downRate: 0, startedAt: Date.now(), session: 'WARP',
     }
   }
   async disconnect() { this.stopProbe(); try { await this.api('/configs') } catch { /* noop */ } }
   async status(): Promise<ConnState> { return this.api('/status') }
+  async traffic(): Promise<{ up: number; down: number; upRate: number; downRate: number }> {
+    const d = await this.api('/traffic')
+    return {
+      up: Number(d.upTotal ?? d.up) || 0,
+      down: Number(d.downTotal ?? d.down) || 0,
+      upRate: Number(d.up) || 0,
+      downRate: Number(d.down) || 0,
+    }
+  }
   probe(onPoint: (p: LatencyPoint) => void) {
     this.stopProbe()
     this.probeTimer = setInterval(async () => {

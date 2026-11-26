@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode, CSSProperties } from 'react'
+import { ChevronDown, Languages, Moon, ShieldCheck, Sun } from 'lucide-react'
 import type { Protocol, Theme, Lang } from '../types'
 
 export function Card({ title, sub, icon, children, className = '', style }: {
@@ -87,6 +89,66 @@ export function ProtocolPicker({ value, onChange, label }: {
   )
 }
 
+/** 首页协议下拉框：盾牌图标 + 当前协议 + 展开箭头 */
+export function ProtocolSelect({ value, onChange, label, availableLabel = '可用', compact = false }: {
+  value: Protocol
+  onChange: (p: Protocol) => void
+  label?: string
+  availableLabel?: string
+  compact?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={rootRef} className={`proto-select ${compact ? 'compact' : ''}`}>
+      {label && <div className="muted proto-label">{label}</div>}
+      <button
+        type="button"
+        className={`proto-trigger ${open ? 'open' : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ShieldCheck size={compact ? 15 : 18} className="proto-shield" />
+        <span className="proto-value">{PROTOCOL_LABELS[value]}</span>
+        <ChevronDown size={compact ? 14 : 16} className={`proto-chevron ${open ? 'open' : ''}`} />
+      </button>
+      {open && (
+        <div className="proto-menu" role="listbox">
+          {PROTOCOLS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="option"
+              aria-selected={p === value}
+              className={`proto-option ${p === value ? 'selected' : ''}`}
+              onClick={() => { onChange(p); setOpen(false) }}
+            >
+              <span className="proto-name">{PROTOCOL_LABELS[p]}</span>
+              <span className="proto-available"><span className="dot" />{availableLabel}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Stat({ label, value, sub, color }: {
   label: string; value: ReactNode; sub?: string; color?: string
 }) {
@@ -139,20 +201,19 @@ export function ThemeLangControls({ theme, lang, onTheme, onLang, t }: {
   theme: Theme; lang: Lang; onTheme: (t: Theme) => void; onLang: (l: Lang) => void;
   t: (k: string) => string
 }) {
+  const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
+  const nextLang: Lang = lang === 'zh' ? 'en' : 'zh'
+  const themeTitle = t(nextTheme === 'dark' ? 'themeSwitchToDark' : 'themeSwitchToLight')
+  const langTitle = t(nextLang === 'en' ? 'langSwitchToEn' : 'langSwitchToZh')
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
-      <div className="segment">
-        {(['light', 'dark'] as Theme[]).map((th) => (
-          <button key={th} className={theme === th ? 'active' : ''} onClick={() => onTheme(th)} title={th}>
-            {t(th === 'light' ? 'themeLight' : 'themeDark')}
-          </button>
-        ))}
-      </div>
-      <div className="segment">
-        {(['zh', 'en'] as Lang[]).map((lg) => (
-          <button key={lg} className={lang === lg ? 'active' : ''} onClick={() => onLang(lg)}>{t(lg === 'zh' ? 'langZh' : 'langEn')}</button>
-        ))}
-      </div>
+    <div className="icon-controls">
+      <button className="icon-btn" type="button" title={themeTitle} aria-label={themeTitle} onClick={() => onTheme(nextTheme)}>
+        {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+      </button>
+      <button className="icon-btn" type="button" title={langTitle} aria-label={langTitle} onClick={() => onLang(nextLang)}>
+        <Languages size={18} />
+        <span className="icon-lang-badge">{lang === 'zh' ? '中' : 'EN'}</span>
+      </button>
     </div>
   )
 }
@@ -162,6 +223,13 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+export function formatRate(bytesPerSec: number): string {
+  const n = Math.max(0, bytesPerSec)
+  if (n < 1024) return `${Math.round(n)} B/s`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB/s`
+  return `${(n / 1024 / 1024).toFixed(2)} MB/s`
 }
 
 export function formatDuration(ms: number): string {

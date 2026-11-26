@@ -46,7 +46,7 @@ export function AboutPage() {
             <div className="muted" style={{ fontSize: 12 }}>{t('appTagline')}</div>
           </div>
         </div>
-        <FieldRow title={t('version')} control={<span className="badge badge-blue">{info?.version || '1.1.0'}</span>} />
+        <FieldRow title={t('version')} control={<span className="badge badge-blue">{info?.version || '1.2.0'}</span>} />
         <FieldRow title={t('diagPlatform')} control={<span className="strong mono">{platform.toUpperCase()}</span>} />
         <FieldRow title={t('license')} control={<span className="strong">{t('licenseDetail')}</span>} />
         <FieldRow title={t('controlCode')} control={

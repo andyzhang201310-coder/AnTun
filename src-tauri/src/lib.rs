@@ -104,6 +104,7 @@ pub fn run() {
             core::core_connect,
             core::core_stop,
             core::core_status,
+            core::core_traffic,
             core::save_credential,
             core::load_credential,
             core::probe_status

@@ -51,6 +51,8 @@ const DEFAULT_CONN: ConnState = {
   latency: 0,
   up: 0,
   down: 0,
+  upRate: 0,
+  downRate: 0,
   startedAt: null,
   session: '',
 }

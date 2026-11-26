@@ -51,6 +51,7 @@ const readmeBefore = fs.readFileSync(readmePath, 'utf8')
 const readmeAfter = readmeBefore
   .replace(new RegExp(`AnTun_${current.replace(/\./g, '\\.')}_`, 'g'), `AnTun_${next}_`)
   .replace(new RegExp(`v${current.replace(/\./g, '\\.')}`, 'g'), `v${next}`)
+  .replace(new RegExp(`当前版本：\\*\\*${current.replace(/\./g, '\\.')}\\*\\*`, 'g'), `当前版本：**${next}**`)
 if (readmeAfter !== readmeBefore) {
   fs.writeFileSync(readmePath, readmeAfter, 'utf8')
   console.log('updated README.md')

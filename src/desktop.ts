@@ -61,6 +61,7 @@ declare global {
       coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string) => Promise<CoreResult>
       coreStop: () => Promise<void>
       coreStatus: () => Promise<boolean>
+      coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
       saveCredential: (cred: WarpCredential) => Promise<void>
       loadCredential: () => Promise<WarpCredential>
       probeStatus: (port: number) => Promise<CoreResult>
@@ -100,6 +101,7 @@ export function initDesktopBridge() {
       invoke<CoreResult>('core_connect', { cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig }),
     coreStop: () => invoke<void>('core_stop'),
     coreStatus: () => invoke<boolean>('core_status'),
+    coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),
     loadCredential: () => invoke<WarpCredential>('load_credential'),
     probeStatus: (port) => invoke<CoreResult>('probe_status', { port }),

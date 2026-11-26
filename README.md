@@ -29,7 +29,8 @@ AnTun 采用 **Web 技术栈一次开发、多端复用**：界面与逻辑只�
 
 完整复刻原版交互，并做了跨平台增强：
 
-- **首页**：唯一的连接圆环（点击连接/断开，会话时钟 / 动画进度）、扫描端点、协议选择（WireGuard / AWG / GOOL / MASQUE H3 / MASQUE H2 / MASQUE in MASQUE）、连接选项、出口 IP/国家/机房/延迟、实时延迟曲线、实时吞吐、国家/Colo 过滤、缓存端点锁定。重复的“连接”按钮已移除。
+- **首页**：唯一的连接圆环（点击连接/断开，会话时钟 / 动画进度）、扫描端点、协议下拉框（盾牌图标 + 当前协议 + 可用状态，支持 WireGuard / AWG / GOOL / MASQUE H3 / MASQUE H2 / MASQUE in MASQUE）、连接选项、出口 IP/国家/机房/延迟、实时延迟曲线、真实上下行速率与累计流量、国家/Colo 过滤、缓存端点锁定。重复的“连接”按钮已移除，窄窗口下连接区自动堆叠。
+- **顶栏**：主题与语言改为图标按钮，单击分别切换浅色/深色与中文/英文，保留悬停提示与 TV 焦点样式。
 - **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点，选中的订阅节点作为 WARP 隧道的前置代理（`dialer-proxy`）。
 - **节点**：端点扫描（2 阶段探测）、搜索、协议过滤、按延迟/丢包/机房排序、点击锁定端点。
 - **规则**：代理模式（自定义 / 绕过大陆 / 全局）、规则增删启停、直连/代理域名清单。
@@ -72,7 +73,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.1.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.2.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -110,7 +111,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、README 安装包名，以及关于页的兜底版本。当前版本：**1.1.0**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、README 安装包名，以及关于页的兜底版本。当前版本：**1.2.0**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml

@@ -2,7 +2,7 @@ import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, Arr
 import { useStore } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
-import { Card, Toggle, ProtocolPicker, FieldRow, Stat, LatencyChart, formatBytes, formatDuration } from '../components/ui'
+import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, formatBytes, formatRate, formatDuration } from '../components/ui'
 
 export function HomePage() {
   const store = useStore()
@@ -21,8 +21,8 @@ export function HomePage() {
   return (
     <div className="page-wrap fade-in stack">
       {/* 连接主区 */}
-      <div className="card" style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) 1.1fr', gap: 28, alignItems: 'center', padding: 28 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+      <div className="card home-connect-card">
+        <div className="home-connect-side" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
           <div
             className={`connect-ring ${conn.connected ? 'connected' : ''} ${conn.connecting ? 'pulse' : ''}`}
             style={{ ['--ring' as any]: `${ringDeg}deg` }}
@@ -43,8 +43,8 @@ export function HomePage() {
           </button>
         </div>
 
-        <div className="stack" style={{ gap: 16 }}>
-          <ProtocolPicker value={settings.proto} onChange={(p) => store.setSetting('proto', p)} label={t('protocol')} />
+        <div className="stack home-options" style={{ gap: 16 }}>
+          <ProtocolSelect value={settings.proto} onChange={(p) => store.setSetting('proto', p)} label={t('protocol')} availableLabel={t('available')} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t('connectOptions')}</div>
             <Card style={{ padding: '6px 16px' }}>
@@ -56,7 +56,7 @@ export function HomePage() {
                 control={<Toggle checked={settings.warpInWarp} onChange={(v) => store.setSetting('warpInWarp', v)} />} />
               {settings.warpInWarp && (
                 <FieldRow title={t('innerProto')} control={
-                  <ProtocolPicker value={settings.innerProto} onChange={(p) => store.setSetting('innerProto', p)} />
+                  <ProtocolSelect compact value={settings.innerProto} onChange={(p) => store.setSetting('innerProto', p)} availableLabel={t('available')} />
                 } />
               )}
               <FieldRow title={t('psiphon')} desc={t('psiphonDesc')}
@@ -98,14 +98,16 @@ export function HomePage() {
 
       <div className="grid-2">
         <Card title={<><Gauge size={16} />{t('throughput')}</>}>
-          <div style={{ display: 'flex', gap: 32 }}>
+          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
             <div>
-              <div className="muted" style={{ fontSize: 11 }}><ArrowUpRight size={12} style={{ verticalAlign: 'middle' }} /> {t('up')}</div>
-              <div className="strong mono" style={{ fontSize: 20, marginTop: 4 }}>{formatBytes(conn.up)}</div>
+              <div className="muted" style={{ fontSize: 11 }}><ArrowUpRight size={12} style={{ verticalAlign: 'middle' }} /> {t('upRate')}</div>
+              <div className="strong mono" style={{ fontSize: 20, marginTop: 4 }}>{formatRate(conn.upRate)}</div>
+              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(conn.up)}</div>
             </div>
             <div>
-              <div className="muted" style={{ fontSize: 11 }}><ArrowDownRight size={12} style={{ verticalAlign: 'middle' }} /> {t('down')}</div>
-              <div className="strong mono" style={{ fontSize: 20, marginTop: 4, color: 'var(--brand)' }}>{formatBytes(conn.down)}</div>
+              <div className="muted" style={{ fontSize: 11 }}><ArrowDownRight size={12} style={{ verticalAlign: 'middle' }} /> {t('downRate')}</div>
+              <div className="strong mono" style={{ fontSize: 20, marginTop: 4, color: 'var(--brand)' }}>{formatRate(conn.downRate)}</div>
+              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(conn.down)}</div>
             </div>
           </div>
         </Card>

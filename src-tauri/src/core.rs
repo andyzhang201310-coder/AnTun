@@ -566,6 +566,43 @@ pub fn core_status(app: AppHandle, state: tauri::State<'_, CoreState>) -> Result
     Ok(exists || running)
 }
 
+/// mihomo 实时流量快照（累计字节数）
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreTraffic {
+    /// 当前上传速率，bytes/s
+    pub up: u64,
+    /// 当前下载速率，bytes/s
+    pub down: u64,
+    /// 累计上传字节数
+    pub up_total: u64,
+    /// 累计下载字节数
+    pub down_total: u64,
+}
+
+/// 读取核心 REST API 的流量快照。/traffic 是流式接口，只取第一行即可。
+#[tauri::command]
+pub fn core_traffic(api_port: u16) -> Result<CoreTraffic, String> {
+    let url = format!("http://127.0.0.1:{}/traffic", api_port);
+    let out = hidden_command("curl.exe")
+        .args(["-s", "--max-time", "2", &url])
+        .output()
+        .map_err(|e| format!("读取流量失败: {}", e))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return Err("核心流量接口不可用".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("流量数据解析失败: {}", e))?;
+    Ok(CoreTraffic {
+        up: value.get("up").and_then(|v| v.as_u64()).unwrap_or(0),
+        down: value.get("down").and_then(|v| v.as_u64()).unwrap_or(0),
+        up_total: value.get("upTotal").and_then(|v| v.as_u64()).unwrap_or(0),
+        down_total: value.get("downTotal").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
+}
+
 /// 保存 WARP 凭证
 #[tauri::command]
 pub fn save_credential(app: AppHandle, cred: WarpCredential) -> Result<(), String> {

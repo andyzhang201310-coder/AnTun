@@ -8,7 +8,15 @@ import { tr } from '../i18n'
 export function useEngine() {
   const store = useStore()
   const adapterRef = useRef<EngineAdapter | null>(null)
+  const trafficRef = useRef({ up: 0, down: 0, t: Date.now(), initialized: false })
+  const rateRef = useRef({ up: 0, down: 0 })
+  const trafficBusyRef = useRef(false)
   const [tick, setTick] = useState(0)
+
+  const resetTraffic = useCallback(() => {
+    trafficRef.current = { up: 0, down: 0, t: Date.now(), initialized: false }
+    rateRef.current = { up: 0, down: 0 }
+  }, [])
 
   // 平台检测 & 适配器创建
   useEffect(() => {
@@ -29,19 +37,71 @@ export function useEngine() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 会话时钟 / 流量模拟，每秒刷新
+  // 会话时钟 / 实时速率：桌面端读核心累计流量并计算每秒增量
   useEffect(() => {
-    const t = setInterval(() => {
-      const c = useStore.getState().conn
-      if (c.connected) {
-        useStore.getState().setConn({
-          up: c.up + Math.floor(Math.random() * 9000),
-          down: c.down + Math.floor(Math.random() * 60000),
+    const timer = setInterval(async () => {
+      const s = useStore.getState()
+      if (!s.conn.connected) return
+      if (trafficBusyRef.current) {
+        setTick((x) => x + 1)
+        return
+      }
+      trafficBusyRef.current = true
+      const now = Date.now()
+      try {
+        const adapter = adapterRef.current
+        let up = trafficRef.current.up
+        let down = trafficRef.current.down
+        let directUpRate: number | undefined
+        let directDownRate: number | undefined
+        if (adapter?.traffic) {
+          const r = await adapter.traffic()
+          up = r.up
+          down = r.down
+          if (typeof r.upRate === 'number' && typeof r.downRate === 'number') {
+            directUpRate = r.upRate
+            directDownRate = r.downRate
+          }
+        } else {
+          // 纯前端演示环境保留轻量模拟，仅用于界面预览
+          up += Math.floor(Math.random() * 9000)
+          down += Math.floor(Math.random() * 60000)
+        }
+        const prev = trafficRef.current
+        let smoothUp = rateRef.current.up
+        let smoothDown = rateRef.current.down
+        if (directUpRate !== undefined && directDownRate !== undefined) {
+          // mihomo /traffic 直接给出每秒速率，这里只做轻微平滑
+          smoothUp = smoothUp * 0.35 + directUpRate * 0.65
+          smoothDown = smoothDown * 0.35 + directDownRate * 0.65
+        } else if (!prev.initialized) {
+          trafficRef.current = { up, down, t: now, initialized: true }
+          rateRef.current = { up: 0, down: 0 }
+          s.setConn({ up, down, upRate: 0, downRate: 0 })
+          setTick((x) => x + 1)
+          return
+        } else {
+          const elapsed = Math.min(5, Math.max(0.5, (now - prev.t) / 1000))
+          const instantUp = Math.max(0, up - prev.up) / elapsed
+          const instantDown = Math.max(0, down - prev.down) / elapsed
+          smoothUp = smoothUp * 0.5 + instantUp * 0.5
+          smoothDown = smoothDown * 0.5 + instantDown * 0.5
+        }
+        rateRef.current = { up: smoothUp, down: smoothDown }
+        trafficRef.current = { up, down, t: now, initialized: true }
+        s.setConn({
+          up, down,
+          upRate: Math.round(smoothUp),
+          downRate: Math.round(smoothDown),
         })
         setTick((x) => x + 1)
+      } catch {
+        setTick((x) => x + 1)
+      } finally {
+        trafficBusyRef.current = false
       }
     }, 1000)
-    return () => clearInterval(t)
+    return () => clearInterval(timer)
   }, [])
 
   const scan = useCallback(async () => {
@@ -100,7 +160,8 @@ export function useEngine() {
       s.addHistory('render config -> start core')
       s.addHistory('probe endpoint -> verify exit')
       const state = await adapter.connect(opts)
-      useStore.getState().setConn({ ...state, connecting: false })
+      resetTraffic()
+      useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
       ;(window as any)._antunSyncTray?.()
       adapter.probe((p) => useStore.getState().pushLatency(p))
       s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
@@ -110,7 +171,7 @@ export function useEngine() {
       s.log('ERROR', `connect failed: ${e.message}`)
       s.addHistory(`connect failed: ${e.message}`, false)
     }
-  }, [])
+  }, [resetTraffic])
 
   // 启动即连接：等适配器与平台状态就绪后再触发，避免首帧竞态
   useEffect(() => {
@@ -125,29 +186,33 @@ export function useEngine() {
     s.log('INFO', 'disconnect -> restore proxy snapshot')
     const adapter = adapterRef.current
     if (adapter) await adapter.disconnect()
+    resetTraffic()
     useStore.getState().setConn({
       connected: false, connecting: false, startedAt: null,
-      exitIp: '', country: '', colo: '', city: '', latency: 0, up: 0, down: 0, session: '',
+      exitIp: '', country: '', colo: '', city: '', latency: 0,
+      up: 0, down: 0, upRate: 0, downRate: 0, session: '',
     })
     ;(window as any)._antunSyncTray?.()
     s.log('INFO', 'disconnected')
     s.addHistory('disconnected')
-  }, [])
+  }, [resetTraffic])
 
   // 真实探测发现隧道失效时，自动清空连接状态（绝不保留假的"已连接"）
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail || '隧道探测失败'
+      resetTraffic()
       useStore.getState().setConn({
         connected: false, connecting: false, startedAt: null,
-        exitIp: '', country: '', colo: '', city: '', latency: 0, session: '',
+        exitIp: '', country: '', colo: '', city: '', latency: 0,
+        up: 0, down: 0, upRate: 0, downRate: 0, session: '',
       })
       useStore.getState().log('ERROR', `tunnel lost: ${detail}`)
       useStore.getState().addHistory('tunnel lost', false)
     }
     window.addEventListener('antun-tunnel-lost', handler)
     return () => window.removeEventListener('antun-tunnel-lost', handler)
-  }, [])
+  }, [resetTraffic])
 
   // 桌面壳退出：断开连接、还原代理后再通知主进程退出
   useEffect(() => {
