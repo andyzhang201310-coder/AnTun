@@ -1,0 +1,20 @@
+proxies:
+  - name: "Test SOCKS"
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+    username: "user"
+    password: "pass"
+    udp: true
+  - name: "Test HTTP"
+    type: http
+    server: 127.0.0.1
+    port: 8080
+    udp: true
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - Test SOCKS
+rules:
+  - MATCH,PROXY
