@@ -281,7 +281,7 @@ fn bundled_resource(app: &AppHandle, name: &str) -> Option<PathBuf> {
 }
 
 /// 把内置的 Psiphon 配套文件复制到用户数据目录，供后续启用 Psiphon 出口时直接使用。
-fn ensure_bundled_extras(app: &AppHandle) {
+pub fn ensure_bundled_extras(app: &AppHandle) {
     let Ok(dir) = app_dir(app) else { return };
     for name in ["psiphon.exe", "client.config", "server_list.dat", "GPL-3.0.txt"] {
         let dest = dir.join(name);

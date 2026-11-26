@@ -12,6 +12,7 @@ export function HomePage() {
 
   const countries = Array.from(new Set(endpoints.map((e) => e.country)))
   const pinned = endpoints.find((e) => e.id === pinnedId)
+  const latestLatency = latencyPoints.length ? latencyPoints[latencyPoints.length - 1].ms : conn.latency
   const ringDeg = conn.connecting ? 220 : conn.connected ? 360 : 0
   const toggleConnect = () => {
     if (conn.connecting) return
@@ -91,7 +92,8 @@ export function HomePage() {
             </div>
           ) : <div className="muted" style={{ fontSize: 12 }}>{t('noData')}</div>}
         </Card>
-        <Card title={<><Radio size={16} />{t('liveLatency')}</>} sub={`${latencyPoints.length} samples`}>
+        <Card title={<><Radio size={16} />{t('liveLatency')}</>}
+          sub={latestLatency ? t('latencySample', { v: latestLatency, n: latencyPoints.length }) : t('latencyEmpty')}>
           <LatencyChart points={latencyPoints} color={conn.connected ? 'var(--success)' : 'var(--brand)'} />
         </Card>
       </div>

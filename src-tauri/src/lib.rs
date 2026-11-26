@@ -1,5 +1,6 @@
 mod core;
 mod core_update;
+mod psiphon;
 mod subscription;
 
 use serde::Serialize;
@@ -110,7 +111,9 @@ pub fn run() {
             core::load_credential,
             core::probe_status,
             core_update::core_update_status,
-            core_update::core_update
+            core_update::core_update,
+            psiphon::psiphon_regions,
+            psiphon::set_psiphon_region
         ])
         .setup(|app| {
             // 上次异常退出若留下代理快照，先还原，避免系统代理指向已死的本地端口

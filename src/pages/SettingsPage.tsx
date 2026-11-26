@@ -4,7 +4,7 @@ import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
 import { parseWarpCredential } from '../engine/credential'
-import type { CoreComponentStatus, CoreUpdateStatus } from '../desktop'
+import type { CoreComponentStatus, CoreUpdateStatus, RegionOption } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
@@ -16,6 +16,8 @@ export function SettingsPage() {
   const [coreStatus, setCoreStatus] = useState<CoreUpdateStatus | null>(null)
   const [coreBusy, setCoreBusy] = useState<'mihomo' | 'psiphon' | null>(null)
   const [coreMsg, setCoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [regions, setRegions] = useState<RegionOption[]>([])
+  const [regionMsg, setRegionMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const isDesk = !!(window as any).AnTunDesktop?.isDesktop
 
   const loadCoreStatus = async () => {
@@ -32,6 +34,7 @@ export function SettingsPage() {
     if (!isDesk) return
     const desk = (window as any).AnTunDesktop
     void loadCoreStatus()
+    desk.psiphonRegions?.().then((list: RegionOption[]) => setRegions(list)).catch(() => setRegions([]))
     desk.loadCredential?.().then((c: any) => setHasCred(!!c)).catch(() => setHasCred(true))
     // 开机自启以系统实际状态为准，避免界面与注册表不一致
     desk.getAutoStart?.().then((v: boolean) => {
@@ -64,6 +67,20 @@ export function SettingsPage() {
     }
   }
 
+  const changeRegion = async (code: string) => {
+    store.setSetting('psiphonRegion', code)
+    setRegionMsg(null)
+    const desk = (window as any).AnTunDesktop
+    if (!isDesk || !desk?.setPsiphonRegion) return
+    try {
+      await desk.setPsiphonRegion(code)
+      setRegionMsg({ ok: true, text: t('regionSaved') })
+      store.log('INFO', `psiphon egress region -> ${code || 'auto'}`)
+    } catch (e: any) {
+      setRegionMsg({ ok: false, text: t('regionSaveFail', { msg: e?.message || String(e) }) })
+    }
+  }
+
   const updateCore = async (kind: 'mihomo' | 'psiphon') => {
     const desk = (window as any).AnTunDesktop
     if (!desk?.coreUpdate) return
@@ -82,6 +99,11 @@ export function SettingsPage() {
       await loadCoreStatus()
     }
   }
+
+  const regionChainDisabled = s.warpInWarp || s.connMode === 'subscription'
+  const regionOptions = regions.some((r) => r.code === s.psiphonRegion)
+    ? regions
+    : [{ code: s.psiphonRegion, nameZh: s.psiphonRegion || t('regionAuto'), nameEn: s.psiphonRegion || 'Automatic', live: false }, ...regions]
 
   const num = (k: 'mixedPort' | 'apiPort' | 'mtu' | 'timeoutSec', v: string) => {
     const n = Number(v)
@@ -255,12 +277,30 @@ export function SettingsPage() {
           <Toggle checked={s.psiphon} onChange={(v) => store.setSetting('psiphon', v)} />
         } />
         {s.psiphon && (
-          <FieldRow title={t('regionExit')} control={
-            <select className="select" value={s.psiphonRegion} onChange={(e) => store.setSetting('psiphonRegion', e.target.value)}>
-              <option value="">{t('autoSelect')}</option>
-              {['US', 'DE', 'GB', 'JP', 'SG', 'CA', 'NL'].map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-          } />
+          <>
+            <FieldRow
+              title={t('regionExit')}
+              desc={regionChainDisabled ? t('regionChainDisabled') : undefined}
+              control={
+                <select
+                  className="select"
+                  disabled={regionChainDisabled}
+                  value={s.psiphonRegion}
+                  onChange={(e) => changeRegion(e.target.value.toUpperCase())}
+                >
+                  {regionOptions.map((r) => {
+                    const name = s.lang === 'zh' ? r.nameZh : r.nameEn
+                    return <option key={r.code || 'auto'} value={r.code}>{r.code ? `${name} · ${r.code}${r.live ? ' ●' : ''}` : name}</option>
+                  })}
+                </select>
+              }
+            />
+            {regionMsg && (
+              <div style={{ fontSize: 12, marginTop: 4, color: regionMsg.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {regionMsg.text}
+              </div>
+            )}
+          </>
         )}
       </Card>
 

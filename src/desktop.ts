@@ -63,6 +63,13 @@ export interface CoreUpdateResult {
   needsRestart: boolean
 }
 
+export interface RegionOption {
+  code: string
+  nameZh: string
+  nameEn: string
+  live: boolean
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown
@@ -88,6 +95,8 @@ declare global {
       probeStatus: (port: number) => Promise<CoreResult>
       coreUpdateStatus: () => Promise<CoreUpdateStatus>
       coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
+      psiphonRegions: () => Promise<RegionOption[]>
+      setPsiphonRegion: (code: string) => Promise<void>
     }
     _antunSyncTray?: () => void
   }
@@ -130,5 +139,7 @@ export function initDesktopBridge() {
     probeStatus: (port) => invoke<CoreResult>('probe_status', { port }),
     coreUpdateStatus: () => invoke<CoreUpdateStatus>('core_update_status'),
     coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
+    psiphonRegions: () => invoke<RegionOption[]>('psiphon_regions'),
+    setPsiphonRegion: (code) => invoke<void>('set_psiphon_region', { region: code }),
   }
 }

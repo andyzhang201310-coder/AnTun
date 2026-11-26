@@ -166,8 +166,13 @@ export function LatencyChart({ points, color = 'var(--brand)' }: {
   points: { t: number; ms: number }[]; color?: string
 }) {
   const w = 600, h = 150, pad = 12
+  const latest = points[points.length - 1]
   if (points.length < 2) {
-    return <div className="muted" style={{ fontSize: 12, padding: '38px 0', textAlign: 'center' }}>—</div>
+    return (
+      <div className="muted" style={{ fontSize: 12, padding: '38px 0', textAlign: 'center' }}>
+        {latest ? <span className="strong mono" style={{ fontSize: 20, color }}>{latest.ms} ms</span> : '—'}
+      </div>
+    )
   }
   const max = Math.max(...points.map((p) => p.ms)) * 1.2 || 100
   const min = Math.min(...points.map((p) => p.ms)) * 0.8
@@ -180,20 +185,29 @@ export function LatencyChart({ points, color = 'var(--brand)' }: {
   const area = `${pad},${h - pad} ${coords.join(' ')} ${w - pad},${h - pad}`
   const gid = 'grad-' + color.replace(/[^a-z0-9]/gi, '')
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" role="img" aria-label="latency chart">
-      <defs>
-        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor={color} stopOpacity="0.28" />
-          <stop offset="1" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {[0.25, 0.5, 0.75].map((r) => (
-        <line key={r} x1={pad} x2={w - pad} y1={pad + r * (h - pad * 2)} y2={pad + r * (h - pad * 2)} stroke="var(--border)" strokeDasharray="3 5" />
-      ))}
-      <polygon points={area} fill={`url(#${gid})`} />
-      <polyline points={coords.join(' ')} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={coords[coords.length - 1].split(',')[0]} cy={coords[coords.length - 1].split(',')[1]} r="4" fill={color} />
-    </svg>
+    <div style={{ position: 'relative' }}>
+      <div style={{
+        position: 'absolute', right: 8, top: 6, zIndex: 1,
+        padding: '4px 9px', borderRadius: 10, fontSize: 13, fontWeight: 800,
+        background: 'var(--card)', border: `1px solid ${color}`, color,
+      }}>
+        {latest.ms} ms
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" role="img" aria-label={`latency chart, latest ${latest.ms} ms`}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor={color} stopOpacity="0.28" />
+            <stop offset="1" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0.25, 0.5, 0.75].map((r) => (
+          <line key={r} x1={pad} x2={w - pad} y1={pad + r * (h - pad * 2)} y2={pad + r * (h - pad * 2)} stroke="var(--border)" strokeDasharray="3 5" />
+        ))}
+        <polygon points={area} fill={`url(#${gid})`} />
+        <polyline points={coords.join(' ')} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={coords[coords.length - 1].split(',')[0]} cy={coords[coords.length - 1].split(',')[1]} r="4" fill={color} />
+      </svg>
+    </div>
   )
 }
 
