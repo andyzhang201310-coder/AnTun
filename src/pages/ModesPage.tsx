@@ -284,8 +284,8 @@ export function ModesPage() {
               const failed = !!(st?.error && delay <= 0 && speed <= 0)
               return (
                 <div key={node.id} className={`node-row t ${selected ? 'selected' : ''}`}
-                  onClick={() => store.setSetting('frontNodeId', node.id)} tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter') store.setSetting('frontNodeId', node.id) }}>
+                  onClick={() => { store.setSetting('frontNodeId', node.id); store.setSetting('connMode', 'subscription') }} tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { store.setSetting('frontNodeId', node.id); store.setSetting('connMode', 'subscription') } }}>
                   <span className="cell mono strong" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
                   <span className="cell hide-sm">{shortType(node.nodeType)}</span>
                   <span className="cell mono hide-sm" title={`${node.server}:${node.port}`}>{node.server}:{node.port}</span>

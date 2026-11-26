@@ -1,4 +1,5 @@
-import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server } from 'lucide-react'
+import { useState } from 'react'
+import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle } from 'lucide-react'
 import { useStore } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
@@ -6,17 +7,68 @@ import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, formatBytes
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, latencyPoints, pinnedId } = store
+  const { settings, conn, endpoints, scanning, latencyPoints, pinnedId, subNodes, nodeStats } = store
   const { scan, connect, disconnect } = useEngine()
+  const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
 
   const countries = Array.from(new Set(endpoints.map((e) => e.country)))
   const pinned = endpoints.find((e) => e.id === pinnedId)
+  const subNode = settings.connMode === 'subscription' ? subNodes.find((n) => n.id === settings.frontNodeId) : undefined
+  const subStat = subNode ? nodeStats[subNode.id] : undefined
+  // 下拉框当前值：订阅模式指向节点，WARP 模式指向锁定端点或自动择优
+  const nodeValue = settings.connMode === 'subscription'
+    ? (subNode ? `sub:${subNode.id}` : 'sub:none')
+    : `warp:${pinnedId ?? 'auto'}`
   const latestLatency = latencyPoints.length ? latencyPoints[latencyPoints.length - 1].ms : conn.latency
   const ringDeg = conn.connecting ? 220 : conn.connected ? 360 : 0
   const toggleConnect = () => {
     if (conn.connecting) return
     conn.connected ? disconnect() : connect()
+  }
+
+  /** 写入节点选择：WARP 端点会同时退出订阅模式，订阅节点则切到订阅模式 */
+  const applyNode = (kind: 'warp' | 'sub', id: string | null) => {
+    if (kind === 'warp') {
+      store.setSetting('connMode', 'warp')
+      store.pinEndpoint(id)
+    } else if (id) {
+      store.setSetting('connMode', 'subscription')
+      store.setSetting('frontNodeId', id)
+    }
+  }
+
+  /** 已连接时切换节点：先断开（还原系统代理）再用新节点重连 */
+  const reconnectIfNeeded = async () => {
+    if (!conn.connected) return
+    setSwitching(true)
+    try {
+      await disconnect()
+      await connect()
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  const pickNode = async (value: string) => {
+    if (switching) return
+    const [kind, id] = value.split(':')
+    if (kind === 'warp') {
+      applyNode('warp', id === 'auto' ? null : id)
+      store.log('INFO', `node switch -> warp ${id === 'auto' ? 'auto' : id}`)
+    } else if (kind === 'sub' && id && id !== 'none') {
+      applyNode('sub', id)
+      store.log('INFO', `node switch -> subscription ${subNodes.find((n) => n.id === id)?.name ?? id}`)
+    } else {
+      return
+    }
+    await reconnectIfNeeded()
+  }
+
+  const pinWarp = async (id: string | null) => {
+    if (switching) return
+    applyNode('warp', id)
+    await reconnectIfNeeded()
   }
 
   return (
@@ -45,6 +97,54 @@ export function HomePage() {
         </div>
 
         <div className="stack home-options" style={{ gap: 16 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>{t('exitNode')}</span>
+              <span className={`badge ${settings.connMode === 'subscription' ? 'badge-blue' : 'badge-gray'}`}>
+                {t(settings.connMode === 'subscription' ? 'modeSubscription' : 'modeWarp')}
+              </span>
+            </div>
+            <select
+              className="select"
+              style={{ width: '100%' }}
+              value={nodeValue}
+              disabled={switching}
+              onChange={(e) => void pickNode(e.target.value)}
+            >
+              <optgroup label={t('modeWarp')}>
+                <option value="warp:auto">{t('autoSelect')}</option>
+                {endpoints.map((e) => (
+                  <option key={e.id} value={`warp:${e.id}`}>{e.host}:{e.port} · {e.country} · {e.latency}ms</option>
+                ))}
+              </optgroup>
+              <optgroup label={t('subscriptionNodes')}>
+                {settings.connMode === 'subscription' && !subNode && (
+                  <option value="sub:none" disabled>{t('noNodeSelected')}</option>
+                )}
+                {subNodes.length ? subNodes.map((n) => {
+                  const st = nodeStats[n.id]
+                  return (
+                    <option key={n.id} value={`sub:${n.id}`}>
+                      {n.name}{st && st.delay > 0 ? ` · ${st.delay}ms` : ''}
+                    </option>
+                  )
+                }) : <option value="" disabled>{t('noSubscription')}</option>}
+              </optgroup>
+            </select>
+            <div className="muted" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+              {switching ? t('switching')
+                : conn.connected ? t('switchReconnect')
+                  : settings.connMode === 'subscription'
+                    ? (subNode ? t('subNodeActive') : t('modeSubscriptionDesc'))
+                    : t('warpSelectHint')}
+            </div>
+            {settings.connMode === 'subscription' && !subNodes.length && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, color: 'var(--warn)', fontSize: 11.5 }}>
+                <AlertCircle size={13} />{t('subMissing')}
+                <button className="btn btn-ghost btn-sm" onClick={() => store.setPage('modes')}>{t('goImportSub')}</button>
+              </div>
+            )}
+          </div>
           <ProtocolSelect value={settings.proto} onChange={(p) => store.setSetting('proto', p)} label={t('protocol')} availableLabel={t('available')} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t('connectOptions')}</div>
@@ -113,8 +213,19 @@ export function HomePage() {
             </div>
           </div>
         </Card>
-        <Card title={<><MapPin size={16} />{t('selectNode')}</>} sub={t('clickToPin')}>
-          {pinned ? (
+        <Card title={<><MapPin size={16} />{t('selectNode')}</>} sub={subNode ? t('modeSubscription') : t('clickToPin')}>
+          {subNode ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Star size={18} fill="var(--brand)" color="var(--brand)" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="strong mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNode.name}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+                  {subNode.nodeType.toUpperCase()} · {subNode.server}:{subNode.port}{subStat && subStat.delay > 0 ? ` · ${subStat.delay}ms` : ''}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" disabled={switching} onClick={() => void pinWarp(null)}>{t('switchToWarp')}</button>
+            </div>
+          ) : pinned ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Star size={18} fill="var(--brand)" color="var(--brand)" />
               <div style={{ flex: 1 }}>
@@ -132,17 +243,17 @@ export function HomePage() {
       </div>
 
       {/* 缓存端点 */}
-      <Card title={<><Server size={16} />{t('cacheEndpoints')}</>} sub={t('totalNodes', { n: endpoints.length })}>
+      <Card title={<><Server size={16} />{t('cacheEndpoints')}</>} sub={`${t('totalNodes', { n: endpoints.length })} · ${t('cacheHint')}`}>
         {endpoints.length ? (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="table-head"><span>{t('nodeHost')}</span><span>{t('nodeCountry')}</span><span className="hide-sm">{t('nodeColo')}</span><span>{t('nodePing')}</span><span /></div>
             {endpoints.slice(0, 8).map((e) => (
-              <div key={e.id} className={`node-row ${pinnedId === e.id ? 'selected' : ''}`} onClick={() => store.pinEndpoint(pinnedId === e.id ? null : e.id)} tabIndex={0}>
+              <div key={e.id} className={`node-row ${pinnedId === e.id && settings.connMode !== 'subscription' ? 'selected' : ''}`} onClick={() => void pinWarp(pinnedId === e.id ? null : e.id)} tabIndex={0}>
                 <span className="cell mono strong">{e.host}:{e.port}</span>
                 <span className="cell">{e.country}</span>
                 <span className="cell hide-sm">{e.colo}</span>
                 <span className="cell" style={{ color: e.latency < 250 ? 'var(--success)' : 'var(--warn)', fontWeight: 700 }}>{e.latency}ms</span>
-                <span className="cell">{pinnedId === e.id ? <Star size={15} fill="var(--brand)" color="var(--brand)" /> : <Star size={15} className="muted" />}</span>
+                <span className="cell">{pinnedId === e.id && settings.connMode !== 'subscription' ? <Star size={15} fill="var(--brand)" color="var(--brand)" /> : <Star size={15} className="muted" />}</span>
               </div>
             ))}
           </div>

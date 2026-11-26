@@ -30,6 +30,7 @@ src-tauri/resources/server_list.dat
 /real-connected.png
 /tauri-connected.png
 /tauri-verify.png
+scripts/shot-*.png
 
 # Editor directories and files
 .vscode/*
