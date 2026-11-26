@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
   Settings, ConnState, Endpoint, Rule, LogEntry, HistoryStep,
-  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode,
+  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat,
 } from '../types'
 
 const DEFAULT_SETTINGS: Settings = {
@@ -78,6 +78,7 @@ interface AppStore {
   allowedCountries: string[]
   subscriptions: Subscription[]
   subNodes: SubNode[]
+  nodeStats: Record<string, NodeStat>
   // 运行时
   conn: ConnState
   endpoints: Endpoint[]
@@ -101,6 +102,8 @@ interface AppStore {
   addSubscription: (s: Subscription) => void
   removeSubscription: (id: string) => void
   setSubNodes: (nodes: SubNode[]) => void
+  mergeNodeStats: (stats: NodeStat[]) => void
+  clearNodeStats: () => void
   addRule: (r: Omit<Rule, 'id'>) => void
   toggleRule: (id: string) => void
   removeRule: (id: string) => void
@@ -119,6 +122,7 @@ export const useStore = create<AppStore>()(
       allowedCountries: [],
       subscriptions: [],
       subNodes: [],
+      nodeStats: {},
       conn: DEFAULT_CONN,
       endpoints: [],
       scanning: false,
@@ -150,6 +154,25 @@ export const useStore = create<AppStore>()(
         subNodes: s.subNodes.filter((n) => n.subId !== id && n.subId !== s.subscriptions.find((x) => x.id === id)?.url),
       })),
       setSubNodes: (subNodes) => set({ subNodes }),
+      mergeNodeStats: (stats) => set((s) => {
+        const next = { ...s.nodeStats }
+        for (const st of stats) {
+          if (!st?.id) continue
+          const prev = next[st.id]
+          const hasDelay = st.delay > 0
+          const hasSpeed = st.speed > 0
+          next[st.id] = {
+            id: st.id,
+            // 延迟与速度分两阶段返回：只更新本阶段测到的值，另一项沿用上次结果
+            delay: hasDelay ? st.delay : (hasSpeed ? (prev?.delay ?? -1) : st.delay),
+            speed: hasSpeed ? st.speed : (prev?.speed ?? 0),
+            bytes: st.bytes || (prev?.bytes ?? 0),
+            error: st.error || (hasDelay || hasSpeed ? '' : (prev?.error ?? '')),
+          }
+        }
+        return { nodeStats: next }
+      }),
+      clearNodeStats: () => set({ nodeStats: {} }),
       addRule: (r) => set((s) => ({ rules: [...s.rules, { ...r, id: newId() }] })),
       toggleRule: (id) => set((s) => ({ rules: s.rules.map((r) => r.id === id ? { ...r, enabled: !r.enabled } : r) })),
       removeRule: (id) => set((s) => ({ rules: s.rules.filter((r) => r.id !== id || r.builtin) })),

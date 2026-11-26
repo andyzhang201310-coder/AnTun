@@ -90,14 +90,14 @@ impl CoreResult {
 
 /// Windows 下所有子进程都隐藏控制台窗口：
 /// mihomo / curl / powershell 都是控制台程序，直接 Command::new 会闪出黑框。
-fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd
 }
 
-fn app_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn app_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map_err(|e| format!("app data dir: {}", e))
@@ -295,7 +295,7 @@ pub fn ensure_bundled_extras(app: &AppHandle) {
 }
 
 /// 取得 mihomo 核心：优先用安装包内置文件，缺失时才走网络下载。
-fn download_core(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn download_core(app: &AppHandle) -> Result<PathBuf, String> {
     let dest = core_path(app)?;
     if dest.exists() {
         return Ok(dest);

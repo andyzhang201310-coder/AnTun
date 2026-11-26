@@ -55,6 +55,21 @@ export interface CoreUpdateStatus {
   psiphon: CoreComponentStatus
 }
 
+export interface NodeStat {
+  id: string
+  /** 毫秒；-1 表示未测或失败 */
+  delay: number
+  /** bytes/s */
+  speed: number
+  bytes: number
+  error: string
+}
+
+export interface NodeTestStart {
+  tested: number
+  skipped: string[]
+}
+
 export interface CoreUpdateResult {
   ok: boolean
   component: string
@@ -127,6 +142,10 @@ declare global {
       psiphonRegions: () => Promise<RegionOption[]>
       setPsiphonRegion: (code: string) => Promise<void>
       netDiagnose: (port: number, kind: 'dns' | 'ai') => Promise<DiagReport>
+      nodeTestStart: (nodes: SubNode[]) => Promise<NodeTestStart>
+      nodeTestDelay: () => Promise<NodeStat[]>
+      nodeTestSpeed: (ids: string[], seconds?: number, concurrency?: number) => Promise<NodeStat[]>
+      nodeTestStop: () => Promise<void>
     }
     _antunSyncTray?: () => void
   }
@@ -180,5 +199,10 @@ export function initDesktopBridge() {
     psiphonRegions: () => invoke<RegionOption[]>('psiphon_regions'),
     setPsiphonRegion: (code) => invoke<void>('set_psiphon_region', { region: code }),
     netDiagnose: (port, kind) => invoke<DiagReport>('net_diagnose', { port, kind }),
+    nodeTestStart: (nodes) => invoke<NodeTestStart>('node_test_start', { nodes }),
+    nodeTestDelay: () => invoke<NodeStat[]>('node_test_delay'),
+    nodeTestSpeed: (ids, seconds, concurrency) =>
+      invoke<NodeStat[]>('node_test_speed', { ids, seconds, concurrency }),
+    nodeTestStop: () => invoke<void>('node_test_stop'),
   }
 }

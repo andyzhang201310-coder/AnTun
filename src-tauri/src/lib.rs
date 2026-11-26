@@ -1,6 +1,7 @@
 mod core;
 mod core_update;
 mod net_diag;
+mod node_test;
 mod psiphon;
 mod subscription;
 
@@ -96,6 +97,7 @@ pub fn run() {
         ))
         .manage(TrayState(Mutex::new(None)))
         .manage(core::CoreState::default())
+        .manage(node_test::NodeTestState::default())
         .invoke_handler(tauri::generate_handler![
             set_autostart,
             get_autostart,
@@ -115,6 +117,10 @@ pub fn run() {
             core_update::core_update,
             psiphon::psiphon_regions,
             psiphon::set_psiphon_region,
+            node_test::node_test_start,
+            node_test::node_test_delay,
+            node_test::node_test_speed,
+            node_test::node_test_stop,
             net_diag::net_diagnose
         ])
         .setup(|app| {
@@ -152,6 +158,10 @@ pub fn run() {
                         // 先停止核心进程并还原系统代理，避免浏览器流量指向死端口
                         if let Some(state) = app.try_state::<core::CoreState>() {
                             let _ = core::core_stop(app.clone(), state);
+                        }
+                        // 结束可能残留的测速核心，避免退出后孤儿进程占用端口
+                        if let Some(state) = app.try_state::<node_test::NodeTestState>() {
+                            let _ = node_test::node_test_stop(state);
                         }
                         // 通知前端断开连接、还原系统代理，再退出（带超时保护）
                         let _ = app.emit("antun-quit-request", ());

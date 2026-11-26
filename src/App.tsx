@@ -34,8 +34,37 @@ function useAppearance() {
   }, [settings.theme, settings.lang])
 }
 
+/**
+ * 平台识别放在应用根部：不依赖首页是否挂载。
+ * 之前只在 useEngine（首页）里检测，从其他页面启动时会一直显示 WEB。
+ */
+function usePlatformDetect() {
+  useEffect(() => {
+    let tries = 0
+    let timer = 0
+    const boot = () => {
+      const ua = navigator.userAgent
+      let platform: 'android' | 'windows' | 'tv' | 'web' = 'web'
+      if (/Android/i.test(ua)) platform = /TV|Android TV|SMART-TV/i.test(ua) ? 'tv' : 'android'
+      else if (/Windows/i.test(ua)) platform = 'windows'
+      else if (/TV|SmartTV|HbbTV/i.test(ua)) platform = 'tv'
+      // Tauri 桥接可能晚于首帧注入，未识别到就短暂重试
+      if ((window as any).AnTunDesktop?.isDesktop) platform = 'windows'
+      if (platform === 'web' && tries < 6) {
+        tries++
+        timer = window.setTimeout(boot, 250)
+        return
+      }
+      useStore.getState().setPlatform(platform)
+    }
+    boot()
+    return () => window.clearTimeout(timer)
+  }, [])
+}
+
 export default function App() {
   useAppearance()
+  usePlatformDetect()
   const store = useStore()
   const { settings, page, setSetting } = store
   const t = (k: string) => tr(k, settings.lang)

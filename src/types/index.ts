@@ -26,6 +26,18 @@ export interface SubNode {
   config: string
 }
 
+/** 节点测速结果 */
+export interface NodeStat {
+  id: string
+  /** 毫秒；-1 表示未测或失败 */
+  delay: number
+  /** bytes/s */
+  speed: number
+  /** 本次实际下载字节数 */
+  bytes: number
+  error: string
+}
+
 /** 扫描到的 WARP 端点 */
 export interface Endpoint {
   id: string
