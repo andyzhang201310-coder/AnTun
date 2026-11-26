@@ -34,7 +34,8 @@ AnTun 采用 **Web 技术栈一次开发、多端复用**：界面与逻辑只�
 - **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点，选中的订阅节点作为 WARP 隧道的前置代理（`dialer-proxy`）。
 - **节点**：端点扫描（2 阶段探测）、搜索、协议过滤、按延迟/丢包/机房排序、点击锁定端点。
 - **规则**：代理模式（自定义 / 绕过大陆 / 全局）、规则增删启停、直连/代理域名清单。
-- **设置**：WARP 账户、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为（开机自启 / 启动即连接已接原生行为）、DNS 与出口（出口地区、Psiphon），全部设置项持久化到本机。
+- **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为（开机自启 / 启动即连接已接原生行为）、DNS 与出口（出口地区、Psiphon），全部设置项持久化到本机。
+- **关于**：仅保留品牌、简介与 AnTun 项目主页；已移除版本/路径/许可证卡片、参考项目链接与控制码。
 - **日志**：运行日志、连接历史、可复制的诊断信息。
 - **关于**：AnTun 真实版本、程序/资源/数据路径、控制码、MIT 代码许可证与内置核心 GPL-3.0 说明、参考项目与核心源码链接。
 - 浅色 / 深色 / 跟随系统主题，中文 / English 双语，手机 / 桌面 / TV 三档响应式布局，TV 遥控器焦点态。
@@ -73,7 +74,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.2.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.3.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium；相比原版 115 MB 仍缩小约 **80%**。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -111,7 +112,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、README 安装包名，以及关于页的兜底版本。当前版本：**1.2.0**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；关于页不再展示版本，脚本会自动跳过该处替换。当前版本：**1.3.0**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml

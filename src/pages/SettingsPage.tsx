@@ -1,22 +1,37 @@
 import { useState, useEffect } from 'react'
-import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle } from 'lucide-react'
+import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, Download, RefreshCw } from 'lucide-react'
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
 import { parseWarpCredential } from '../engine/credential'
+import type { CoreComponentStatus, CoreUpdateStatus } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
   const { settings: s } = store
-  const t = (k: string) => tr(k, s.lang)
+  const t = (k: string, vars?: Record<string, string | number>) => tr(k, s.lang, vars)
   const [warpText, setWarpText] = useState('')
   const [warpMsg, setWarpMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [hasCred, setHasCred] = useState(false)
+  const [coreStatus, setCoreStatus] = useState<CoreUpdateStatus | null>(null)
+  const [coreBusy, setCoreBusy] = useState<'mihomo' | 'psiphon' | null>(null)
+  const [coreMsg, setCoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const isDesk = !!(window as any).AnTunDesktop?.isDesktop
+
+  const loadCoreStatus = async () => {
+    const desk = (window as any).AnTunDesktop
+    if (!isDesk || !desk?.coreUpdateStatus) return
+    try {
+      setCoreStatus(await desk.coreUpdateStatus())
+    } catch {
+      // 状态查询失败时保留上一次结果，不打断其他设置操作
+    }
+  }
 
   useEffect(() => {
     if (!isDesk) return
     const desk = (window as any).AnTunDesktop
+    void loadCoreStatus()
     desk.loadCredential?.().then((c: any) => setHasCred(!!c)).catch(() => setHasCred(true))
     // 开机自启以系统实际状态为准，避免界面与注册表不一致
     desk.getAutoStart?.().then((v: boolean) => {
@@ -46,6 +61,25 @@ export function SettingsPage() {
       store.log('INFO', 'warp credential imported')
     } catch (e: any) {
       setWarpMsg({ ok: false, text: `${t('accountInvalid')}: ${e.message}` })
+    }
+  }
+
+  const updateCore = async (kind: 'mihomo' | 'psiphon') => {
+    const desk = (window as any).AnTunDesktop
+    if (!desk?.coreUpdate) return
+    setCoreBusy(kind)
+    setCoreMsg(null)
+    try {
+      const result = await desk.coreUpdate(kind)
+      setCoreMsg({ ok: true, text: t('coreUpdateOk', { v: result.version }) })
+      store.log('INFO', `core update ${kind} -> ${result.version}`)
+    } catch (e: any) {
+      const message = e?.message || String(e)
+      setCoreMsg({ ok: false, text: t('coreUpdateFail', { msg: message }) })
+      store.log('ERROR', `core update ${kind} failed: ${message}`)
+    } finally {
+      setCoreBusy(null)
+      await loadCoreStatus()
     }
   }
 
@@ -84,6 +118,46 @@ export function SettingsPage() {
             )}
           </div>
         </div>
+      </Card>
+
+      {/* 内核更新 */}
+      <Card title={<><Download size={16} />{t('cardCoreUpdate')}</>}>
+        <div className="muted" style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 12 }}>
+          {isDesk ? t('cardCoreUpdateDesc') : t('coreUpdateDesktopOnly')}
+        </div>
+        {(['mihomo', 'psiphon'] as const).map((kind) => {
+          const component: CoreComponentStatus | undefined = coreStatus?.[kind]
+          const updated = component?.updatedAt
+            ? `${t('coreUpdatedAt')}: ${new Date(component.updatedAt * 1000).toLocaleString()}`
+            : ''
+          const source = component ? (component.source === 'updated' ? t('coreUpdated') : t('coreBundled')) : ''
+          return (
+            <FieldRow
+              key={kind}
+              title={kind === 'mihomo' ? t('coreMihomo') : t('corePsiphon')}
+              desc={[source, updated].filter(Boolean).join(' · ')}
+              control={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <span className={`badge ${component?.installed ? 'badge-green' : 'badge-orange'}`}>
+                    {component?.installed ? component.version : t('coreNotInstalled')}
+                  </span>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    disabled={!isDesk || coreBusy !== null || store.conn.connected || store.conn.connecting}
+                    onClick={() => updateCore(kind)}
+                  >
+                    <RefreshCw size={14} />{coreBusy === kind ? t('coreUpdating') : t('coreUpdateNow')}
+                  </button>
+                </div>
+              }
+            />
+          )
+        })}
+        {coreMsg && (
+          <div style={{ fontSize: 12, marginTop: 10, color: coreMsg.ok ? 'var(--success)' : 'var(--danger)' }}>
+            {coreMsg.text}
+          </div>
+        )}
       </Card>
 
       {/* 捕获与端口 */}

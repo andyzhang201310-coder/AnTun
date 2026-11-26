@@ -44,7 +44,15 @@ replace('src-tauri/tauri.conf.json', /"version":\s*"[^"]+"/, `"version": "${next
 replace('src-tauri/tauri.conf.json', /"copyright":\s*"AnTun [^"]+ - MIT License"/, `"copyright": "AnTun ${next} - MIT License"`, 'tauri copyright')
 replace('src-tauri/Cargo.toml', /version\s*=\s*"[^"]+"/, `version = "${next}"`, 'cargo package')
 replace('src-tauri/Cargo.lock', /(name\s*=\s*"antun"\s*\nversion\s*=\s*)"[^"]+"/, `$1"${next}"`, 'cargo lock')
-replace('src/pages/AboutPage.tsx', /info\?\.version \|\| '[^']+'/, `info?.version || '${next}'`, 'about fallback')
+const aboutPath = path.join(root, 'src/pages/AboutPage.tsx')
+const aboutBefore = fs.readFileSync(aboutPath, 'utf8')
+const aboutAfter = aboutBefore.replace(/info\?\.version \|\| '[^']+'/, `info?.version || '${next}'`)
+if (aboutAfter !== aboutBefore) {
+  fs.writeFileSync(aboutPath, aboutAfter, 'utf8')
+  console.log('updated src/pages/AboutPage.tsx')
+} else {
+  console.log('skipped AboutPage fallback (page no longer shows version)')
+}
 
 const readmePath = path.join(root, 'README.md')
 const readmeBefore = fs.readFileSync(readmePath, 'utf8')

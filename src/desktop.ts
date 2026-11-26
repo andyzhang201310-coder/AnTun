@@ -42,6 +42,27 @@ export interface CoreResult {
   error: string
 }
 
+export interface CoreComponentStatus {
+  installed: boolean
+  version: string
+  updatedAt: number | null
+  source: 'bundled' | 'updated'
+  size: number
+}
+
+export interface CoreUpdateStatus {
+  mihomo: CoreComponentStatus
+  psiphon: CoreComponentStatus
+}
+
+export interface CoreUpdateResult {
+  ok: boolean
+  component: string
+  version: string
+  message: string
+  needsRestart: boolean
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown
@@ -65,6 +86,8 @@ declare global {
       saveCredential: (cred: WarpCredential) => Promise<void>
       loadCredential: () => Promise<WarpCredential>
       probeStatus: (port: number) => Promise<CoreResult>
+      coreUpdateStatus: () => Promise<CoreUpdateStatus>
+      coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
     }
     _antunSyncTray?: () => void
   }
@@ -105,5 +128,7 @@ export function initDesktopBridge() {
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),
     loadCredential: () => invoke<WarpCredential>('load_credential'),
     probeStatus: (port) => invoke<CoreResult>('probe_status', { port }),
+    coreUpdateStatus: () => invoke<CoreUpdateStatus>('core_update_status'),
+    coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
   }
 }

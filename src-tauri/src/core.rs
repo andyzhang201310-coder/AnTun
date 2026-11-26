@@ -267,6 +267,11 @@ fn stop_child(state: &tauri::State<'_, CoreState>) {
     }
 }
 
+/// 供内核更新命令判断是否有正在运行的隧道，避免替换被占用的 exe。
+pub fn is_running(state: &tauri::State<'_, CoreState>) -> bool {
+    state.child.lock().map(|guard| guard.is_some()).unwrap_or(false)
+}
+
 /// 查找随安装包内置的资源文件（兼容 resources/ 子目录与根目录两种布局）
 fn bundled_resource(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let base = app.path().resource_dir().ok()?;
