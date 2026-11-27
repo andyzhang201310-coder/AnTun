@@ -226,6 +226,12 @@ export class DesktopAdapter implements EngineAdapter {
     }
   }
 
+  async cancel(): Promise<void> {
+    // 让 Rust 侧立刻掐掉 Psiphon 与核心：否则那一轮出口探测还要跑到超时，
+    // 用户点了取消却要再等十几秒。cancel 之后 connect 的 Promise 会尽快 reject。
+    await this.desk.coreCancelConnect()
+  }
+
   async disconnect(): Promise<void> {
     this.stopProbe()
     this.connected = false

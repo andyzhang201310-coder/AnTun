@@ -13,6 +13,7 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Child;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -333,7 +334,12 @@ enum Fail {
 }
 
 /// 启动一次 Psiphon 进程并等隧道建立
-fn attempt_once(app: &AppHandle, region: &str, timeout: Duration) -> Result<u16, Fail> {
+fn attempt_once(
+    app: &AppHandle,
+    region: &str,
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> Result<u16, Fail> {
     crate::core::ensure_bundled_extras(app);
 
     let dir = work_dir(app).map_err(Fail::Fatal)?;
@@ -378,6 +384,10 @@ fn attempt_once(app: &AppHandle, region: &str, timeout: Duration) -> Result<u16,
 
     let started = Instant::now();
     loop {
+        // 用户点「取消连接」：立刻放弃，不再等隧道建立
+        if cancel.load(Ordering::SeqCst) {
+            return Err(Fail::Fatal(crate::core::CANCELLED.into()));
+        }
         // 进程提前退出（本机观察到过 Go runtime 崩溃）：立刻失败，不要白等到超时
         let exit_code = {
             let st = app.state::<PsiphonState>();
@@ -425,7 +435,7 @@ fn attempt_once(app: &AppHandle, region: &str, timeout: Duration) -> Result<u16,
 ///
 /// 单次尝试不成功就重启进程再试：实测同一网络下第一次可能一轮尝试全部连不上，
 /// 重启后换一批服务器往往十几秒就通，所以重试是必要的而不是保险措施。
-pub fn start(app: &AppHandle, region: &str, timeout: Duration) -> Result<u16, String> {
+pub fn start(app: &AppHandle, region: &str, timeout: Duration, cancel: &AtomicBool) -> Result<u16, String> {
     let region = valid_region(region).map_err(|e| e.to_string())?;
     let deadline = Instant::now() + timeout;
     let mut attempt = 0;
@@ -433,13 +443,18 @@ pub fn start(app: &AppHandle, region: &str, timeout: Duration) -> Result<u16, St
 
     loop {
         attempt += 1;
+        // 取消后不再开新一轮尝试
+        if cancel.load(Ordering::SeqCst) {
+            stop(app);
+            return Err(crate::core::CANCELLED.into());
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
         let slice = remaining.min(Duration::from_secs(ATTEMPT_TIMEOUT_SECS));
         stop(app);
-        match attempt_once(app, &region, slice) {
+        match attempt_once(app, &region, slice, cancel) {
             Ok(port) => return Ok(port),
             Err(Fail::Fatal(msg)) => {
                 stop(app);

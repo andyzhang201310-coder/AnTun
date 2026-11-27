@@ -329,6 +329,21 @@ a { color: inherit; text-decoration: none; }
   background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; box-shadow: 0 10px 28px rgba(91,110,245,.4); transition: all .3s; }
 .connect-ring.connected .pwr { background: linear-gradient(135deg, var(--success), #0fa877); box-shadow: 0 10px 28px rgba(23,181,126,.4); }
 
+/* 连接中：整圈可点击取消。只靠小字提示不够明显，用暂停色 + hover/按下的反馈说明"这里能点" */
+.connect-ring.cancellable { cursor: pointer; }
+.connect-ring.cancellable .pwr {
+  background: linear-gradient(135deg, var(--warn), #d98a10);
+  box-shadow: 0 10px 28px rgba(240,160,32,.38);
+}
+.connect-ring.cancellable:hover .pwr { filter: brightness(1.07); }
+.connect-ring.cancellable:active .pwr { transform: scale(.95); }
+/* 已受理取消、正在等 Rust 收尾：置灰，避免用户连点 */
+.connect-ring.cancelling { cursor: progress; }
+.connect-ring.cancelling .pwr {
+  background: linear-gradient(135deg, var(--surface-3), var(--surface-3));
+  color: var(--text-2); box-shadow: none;
+}
+
 /* ============ 表格 / 列表 ============ */
 .node-row {
   display: grid; grid-template-columns: 1.6fr 1fr .8fr .7fr auto; align-items: center; gap: 12px;

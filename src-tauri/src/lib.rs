@@ -111,6 +111,7 @@ pub fn run() {
             subscription::subscription_fetch,
             subscription::subscription_parse,
             core::core_connect,
+            core::core_cancel_connect,
             core::core_stop,
             core::core_status,
             core::core_traffic,

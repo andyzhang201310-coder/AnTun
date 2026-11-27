@@ -10,6 +10,13 @@ import { tr } from '../i18n'
 // 都操作同一个适配器实例，避免多个 useEngine 实例各自持有一份状态而互相打架。
 let engineAdapter: EngineAdapter | null = null
 
+// 连接流程的互斥与取消：
+// 取消后 UI 会立刻回到「未连接」，但 Rust 侧那条连接还要几百毫秒才收尾。
+// 若此时允许再点一次，就会出现两个 core_connect 并发抢同一个核心与 Psiphon。
+// 所以用模块级的 in-flight 标记挡住重入，等真正的 Promise 结束才放开。
+let connectInFlight = false
+let cancelRequested = false
+
 function ensureAdapter(): EngineAdapter {
   const s = useStore.getState()
   if (!engineAdapter) {
@@ -72,7 +79,15 @@ function autoCandidates(list: Endpoint[], rank: Settings['endpointRank']): Endpo
 
 async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<boolean> {
   const s = useStore.getState()
-  if (s.conn.connecting || s.conn.connected) return false
+  if (connectInFlight) {
+    // 上一次连接刚被取消、Rust 还在收尾：明确告诉用户而不是静默无反应
+    s.log('WARN', 'connect ignored: 上一次连接仍在收尾，请稍候再试')
+    return false
+  }
+  if (s.conn.connected) return false
+  connectInFlight = true
+  cancelRequested = false
+  s.setCancelling(false)
   s.setConn({ connecting: true, session: '' })
   s.log('INFO', `connect -> protocol=${s.settings.proto}`)
   s.addHistory(`connect ${s.settings.proto}`)
@@ -99,6 +114,8 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
 
     let lastErr = '连接失败'
     for (let i = 0; i < plan.length; i++) {
+      // 已取消：不要换下一个端点继续试（那会重新起一次完整连接）
+      if (cancelRequested) break
       const ep = plan[i]
       // 前几次给较短超时，保证失败能快速换端点；最后一次用用户设置的完整超时
       const timeoutSec = i === plan.length - 1 ? s.settings.timeoutSec : Math.min(15, s.settings.timeoutSec)
@@ -138,6 +155,8 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
         return true
       } catch (e: any) {
         lastErr = e.message
+        // 取消引起的 reject 不算「这个端点失败」，不要刷成 WARN 让用户以为节点有问题
+        if (cancelRequested) break
         s.log('WARN', `endpoint ${ep ? `${ep.host}:${ep.port}` : 'default'} failed: ${e.message}`)
         if (i < plan.length - 1) {
           s.addHistory(`switch endpoint: ${ep?.host ?? '—'} -> ${plan[i + 1]?.host ?? '—'}`, false)
@@ -146,15 +165,47 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
     }
     throw new Error(lastErr)
   } catch (e: any) {
+    const wasCancelled = cancelRequested
     useStore.getState().setConn({ connecting: false, connected: false })
-    s.log('ERROR', `connect failed: ${e.message}`)
-    s.addHistory(`connect failed: ${e.message}`, false)
+    useLive.getState().resetLive()
+    ;(window as any)._antunSyncTray?.()
+    if (wasCancelled) {
+      s.log('INFO', 'connect cancelled by user')
+      s.addHistory('connect cancelled', false)
+    } else {
+      s.log('ERROR', `connect failed: ${e.message}`)
+      s.addHistory(`connect failed: ${e.message}`, false)
+    }
     return false
+  } finally {
+    connectInFlight = false
+    cancelRequested = false
+    useStore.getState().setCancelling(false)
   }
 }
 
-async function handleTunnelLost(detail: string) {
+/**
+ * 取消正在进行的连接。
+ *
+ * 只置标记是不够的：Rust 侧可能正卡在「等 Psiphon 隧道」或「出口探测」里，
+ * 所以要它把 Psiphon 进程和核心一起掐掉，那条链路才会在几百毫秒内退出来。
+ * 真正的状态复位由 engineConnect 的 catch/finally 完成，这里只负责「已受理」。
+ */
+async function engineCancel(): Promise<void> {
   const s = useStore.getState()
+  if (!connectInFlight || cancelRequested) return
+  cancelRequested = true
+  s.setCancelling(true)
+  s.log('INFO', 'cancel connect -> 用户取消')
+  s.addHistory('cancel connect', false)
+  try {
+    await engineAdapter?.cancel?.()
+  } catch (e: any) {
+    s.log('WARN', `cancel failed: ${e.message}`)
+  }
+}
+
+async function handleTunnelLost(detail: string) {  const s = useStore.getState()
   s.log('WARN', `tunnel lost: ${detail}`)
   s.addHistory('tunnel lost', false)
   s.setConn(CLEARED_CONN)
@@ -399,5 +450,9 @@ export function useEngine() {
     desk.onQuitRequest?.(handler)
   }, [disconnect])
 
-  return { scan, connect, disconnect }
+  const cancel = useCallback(async () => {
+    await engineCancel()
+  }, [])
+
+  return { scan, connect, disconnect, cancel }
 }

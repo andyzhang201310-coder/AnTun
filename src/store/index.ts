@@ -109,6 +109,11 @@ interface AppStore {
   endpoints: Endpoint[]
   scanning: boolean
   /**
+   * 已受理「取消连接」但连接流程还没真正退出。
+   * 放在 store 而不是组件里：切页时首页会卸载，这个提示不能丢。
+   */
+  cancelling: boolean
+  /**
    * 节点页搜索词。只在本进程内保留：切页不丢（页面是条件渲染的），
    * 但不落盘 —— 否则下次开机打开节点页，列表是被过滤过的，容易以为端点没了。
    */
@@ -128,6 +133,7 @@ interface AppStore {
   setConn: (c: Partial<ConnState>) => void
   setEndpoints: (e: Endpoint[]) => void
   setScanning: (b: boolean) => void
+  setCancelling: (b: boolean) => void
   setNodeQuery: (q: string) => void
   setSavedQuery: (q: string) => void
   pinEndpoint: (id: string | null) => void
@@ -210,6 +216,7 @@ export const useStore = create<AppStore>()(
       conn: DEFAULT_CONN,
       endpoints: [],
       scanning: false,
+      cancelling: false,
       nodeQuery: '',
       savedQuery: '',
       rules: DEFAULT_RULES,
@@ -225,6 +232,7 @@ export const useStore = create<AppStore>()(
       setConn: (partial) => set((s) => ({ conn: { ...s.conn, ...partial } })),
       setEndpoints: (endpoints) => set({ endpoints }),
       setScanning: (scanning) => set({ scanning }),
+      setCancelling: (cancelling) => set({ cancelling }),
       setNodeQuery: (nodeQuery) => set({ nodeQuery }),
       setSavedQuery: (savedQuery) => set({ savedQuery }),
       pinEndpoint: (pinnedId) => set({ pinnedId }),

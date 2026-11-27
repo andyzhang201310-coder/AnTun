@@ -168,6 +168,7 @@ declare global {
       // 真实连接核心
       coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string, net?: NetOptions, endpoint?: { host: string; port: number } | null) => Promise<CoreResult>
       coreStop: () => Promise<void>
+      coreCancelConnect: () => Promise<void>
       coreStatus: () => Promise<boolean>
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
       saveCredential: (cred: WarpCredential) => Promise<void>
@@ -237,6 +238,7 @@ export function initDesktopBridge() {
         psiphonRegion: net?.psiphonRegion ?? '',
       }),
     coreStop: () => invoke<void>('core_stop'),
+    coreCancelConnect: () => invoke<void>('core_cancel_connect'),
     coreStatus: () => invoke<boolean>('core_status'),
     coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),

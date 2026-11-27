@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,7 +33,23 @@ pub struct CoreState {
     /// Windows Job 对象句柄：句柄随进程退出自动关闭，内核子进程被系统一起结束，
     /// 避免主程序被强杀后残留 mihomo 占着 7890/9090，导致下次连接起不来。
     job: Mutex<Option<isize>>,
+    /// 取消标志：点「取消连接」时置真。连接链路的每个阻塞点在下一轮轮询里
+    /// 看到它就以「已取消」退出，而不是硬等 Psiphon 重试与出口探测跑完。
+    cancel: AtomicBool,
 }
+
+/// 取消信号：连接链路（含 Psiphon 子模块）统一读这一个标志。
+pub(crate) fn cancel_flag(state: &CoreState) -> &AtomicBool {
+    &state.cancel
+}
+
+/// 是否已被取消。拿不到 State 时按未取消处理，避免误伤正常连接。
+fn is_cancelled(app: &AppHandle) -> bool {
+    app.state::<CoreState>().cancel.load(Ordering::SeqCst)
+}
+
+/// 用户主动取消连接时统一使用的错误文本：前端据此判定「不是失败，是被取消」。
+pub(crate) const CANCELLED: &str = "已取消连接";
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
@@ -718,6 +735,20 @@ rules:
     )
 }
 
+/// 取消正在进行的连接
+///
+/// 连接链路里最长的两段是「Psiphon 建隧道」和「出口探测」，都只能靠轮询等待。
+/// 光置标志不够——正在等的那一轮还得等它自己超时，所以这里同时把两条阻塞源掐掉：
+/// Psiphon 子进程一死，它的等待循环立刻返回；核心一停，出口探测的 curl 立刻连接失败。
+/// 两者都会让 attempt_connect 在几百毫秒内走到下一个检查点并返回「已取消连接」。
+#[tauri::command]
+pub fn core_cancel_connect(app: AppHandle) {
+    app.state::<CoreState>().cancel.store(true, Ordering::SeqCst);
+    crate::psiphon::stop(&app);
+    stop_child(app.state::<CoreState>().inner());
+    let _ = restore_system_proxy(&app);
+}
+
 /// 停止核心进程
 #[tauri::command]
 pub fn core_stop(app: AppHandle, state: tauri::State<'_, CoreState>) -> Result<(), String> {
@@ -931,6 +962,8 @@ pub async fn core_connect(
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
     let src = crate::credential::source_of(&cred).to_string();
+    // 每次连接开始都清一次取消标志：上一次的取消不该影响这一次
+    app.state::<CoreState>().cancel.store(false, Ordering::SeqCst);
     let args = ConnectArgs {
         protocol,
         port,
@@ -963,6 +996,14 @@ pub async fn core_connect(
                 Ok(r)
             }
             Err(first_err) => {
+                // 用户主动取消：不回退内置凭证，也不该弹「凭证失效」误导用户
+                if is_cancelled(&app) {
+                    return Ok(CoreResult {
+                        error: CANCELLED.into(),
+                        credential_source: src,
+                        ..Default::default()
+                    });
+                }
                 if src == "builtin" {
                     return Ok(CoreResult {
                         error: first_err,
@@ -987,13 +1028,22 @@ pub async fn core_connect(
                         r.fallback_reason = first_err;
                         Ok(r)
                     }
-                    Err(second) => Ok(CoreResult {
-                        error: format!("{}；回退内置凭证仍失败：{}", first_err, second),
-                        credential_source: "builtin".into(),
-                        fallback: true,
-                        fallback_reason: first_err,
-                        ..Default::default()
-                    }),
+                    Err(second) => {
+                        if is_cancelled(&app) {
+                            return Ok(CoreResult {
+                                error: CANCELLED.into(),
+                                credential_source: "builtin".into(),
+                                ..Default::default()
+                            });
+                        }
+                        Ok(CoreResult {
+                            error: format!("{}；回退内置凭证仍失败：{}", first_err, second),
+                            credential_source: "builtin".into(),
+                            fallback: true,
+                            fallback_reason: first_err,
+                            ..Default::default()
+                        })
+                    }
                 }
             }
         }
@@ -1046,13 +1096,17 @@ fn attempt_connect(
     let mut psi_guard = PsiphonGuard { app, keep: !a.psiphon };
     let psiphon_port = if a.psiphon {
         psi_guard.keep = false;
+        if is_cancelled(app) {
+            return Err(CANCELLED.into());
+        }
         match crate::psiphon::start(
             app,
             &a.psiphon_region,
             Duration::from_secs(crate::psiphon::DEFAULT_TIMEOUT_SECS),
+            cancel_flag(state),
         ) {
             Ok(p) => Some(p),
-            Err(e) => return Err(format!("Psiphon 出口启动失败：{}", e)),
+            Err(e) => return Err(if is_cancelled(app) { CANCELLED.into() } else { format!("Psiphon 出口启动失败：{}", e) }),
         }
     } else {
         crate::psiphon::stop(app);
@@ -1060,6 +1114,9 @@ fn attempt_connect(
     };
 
     // 2. 确保核心存在
+    if is_cancelled(app) {
+        return Err(CANCELLED.into());
+    }
     let exe = download_core(app)?;
     ensure_bundled_extras(app);
 
@@ -1095,6 +1152,9 @@ fn attempt_connect(
     }
 
     // 5. 启动核心
+    if is_cancelled(app) {
+        return Err(CANCELLED.into());
+    }
     let child = hidden_command(&exe)
         .args(["-f", cfg_path.to_string_lossy().as_ref()])
         .stdin(Stdio::null())
@@ -1123,6 +1183,12 @@ fn attempt_connect(
     let mut last_err = String::new();
 
     loop {
+        // 用户点「取消连接」：立刻收尾，不把这一轮的出口探测跑完
+        if is_cancelled(app) {
+            stop_child(state);
+            let _ = restore_system_proxy(app);
+            return Err(CANCELLED.into());
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

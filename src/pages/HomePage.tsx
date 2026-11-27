@@ -11,10 +11,10 @@ import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, pinnedId, subNodes, savedNodes, nodeStats, coloLog } = store
+  const { settings, conn, endpoints, scanning, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
   const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
-  const { scan, connect, disconnect } = useEngine()
+  const { scan, connect, disconnect, cancel } = useEngine()
   const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
 
@@ -78,7 +78,11 @@ export function HomePage() {
   const latestLatency = latencyPoints.length ? latencyPoints[latencyPoints.length - 1].ms : conn.latency
   const ringDeg = conn.connecting ? 220 : conn.connected ? 360 : 0
   const toggleConnect = () => {
-    if (conn.connecting) return
+    // 连接中点一下就是取消：以前这里直接 return，点错只能干等 Psiphon 重试跑完
+    if (conn.connecting) {
+      if (!cancelling) void cancel()
+      return
+    }
     conn.connected ? disconnect() : connect()
   }
 
@@ -156,19 +160,30 @@ export function HomePage() {
       <div className="card home-connect-card">
         <div className="home-connect-side">
           <div
-            className={`connect-ring ${conn.connected ? 'connected' : ''} ${conn.connecting ? 'pulse' : ''}`}
+            className={`connect-ring ${conn.connected ? 'connected' : ''} ${conn.connecting ? 'pulse' : ''} ${conn.connecting ? 'cancellable' : ''} ${cancelling ? 'cancelling' : ''}`}
             style={{ ['--ring' as any]: `${ringDeg}deg` }}
             onClick={toggleConnect}
-            role="button" tabIndex={0} aria-disabled={conn.connecting}
+            role="button" tabIndex={0}
+            title={conn.connecting ? t('cancelConnect') : undefined}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleConnect() } }}
           >
             <div className="inner">
               <div className="pwr"><Power size={34} strokeWidth={2.3} /></div>
-              <div style={{ marginTop: 14, fontSize: 15, fontWeight: 800 }}>{t(conn.connected ? 'connected' : conn.connecting ? 'connecting' : 'connect')}</div>
+              <div style={{ marginTop: 14, fontSize: 15, fontWeight: 800 }}>
+                {conn.connected
+                  ? t('connected')
+                  : cancelling
+                    ? t('cancelling')
+                    : conn.connecting ? t('connecting') : t('connect')}
+              </div>
               <div className="muted mono" style={{ fontSize: 11, marginTop: 4 }}>
                 {conn.startedAt && conn.connected
                   ? t('sessionClock') + ' ' + formatDuration(Date.now() - conn.startedAt)
-                  : conn.connecting && settings.psiphon ? t('psiphonStarting') : t('appTagline')}
+                  : cancelling
+                    ? t('cancelPending')
+                    : conn.connecting
+                      ? `${settings.psiphon && settings.connMode === 'warp' ? t('psiphonStarting') + ' · ' : ''}${t('cancelHint')}`
+                      : t('appTagline')}
               </div>
             </div>
           </div>

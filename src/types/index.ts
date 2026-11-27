@@ -174,6 +174,8 @@ export interface EngineAdapter {
   readonly name: string
   scan(opts?: { protocol?: Protocol }): Promise<Endpoint[]>
   connect(opts: ConnectOptions): Promise<ConnState>
+  /** 取消正在进行的连接：立刻收掉 Psiphon 与核心，让 connect 尽快返回 */
+  cancel?(): Promise<void>
   disconnect(): Promise<void>
   status(): Promise<ConnState>
   probe(onPoint: (p: LatencyPoint) => void): void
