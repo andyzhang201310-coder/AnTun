@@ -3,12 +3,15 @@ import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, 
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
+import { useEngine } from '../engine/useEngine'
 import { parseWarpCredential } from '../engine/credential'
 import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport, CredentialInfo } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
   const { settings: s } = store
+  const { connect, disconnect } = useEngine()
+  const [psiphonBusy, setPsiphonBusy] = useState(false)
   const t = (k: string, vars?: Record<string, string | number>) => tr(k, s.lang, vars)
   const [warpText, setWarpText] = useState('')
   const [warpMsg, setWarpMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -76,6 +79,24 @@ export function SettingsPage() {
       store.log('INFO', 'warp credential imported')
     } catch (e: any) {
       setWarpMsg({ ok: false, text: `${t('accountInvalid')}: ${e.message}` })
+    }
+  }
+
+  /**
+   * 切换 Psiphon 出口：出口是在连接时写进核心配置的，已连接时必须断开重连才生效
+   * （与首页同一个判定，订阅模式下不可用——订阅节点自己出站）
+   */
+  const togglePsiphon = async (v: boolean) => {
+    if (psiphonBusy || store.conn.connecting || s.connMode === 'subscription') return
+    store.setSetting('psiphon', v)
+    store.log('INFO', `psiphon -> ${v ? 'on' : 'off'}`)
+    if (!store.conn.connected) return
+    setPsiphonBusy(true)
+    try {
+      await disconnect()
+      await connect()
+    } finally {
+      setPsiphonBusy(false)
     }
   }
 
@@ -317,9 +338,22 @@ export function SettingsPage() {
         <FieldRow title={t('dnsLeak')} desc={t('dnsLeakDesc')} control={
           <Toggle checked={s.dnsLeak} onChange={(v) => store.setSetting('dnsLeak', v)} />
         } />
-        <FieldRow title={t('psiphon')} desc={t('psiphonDesc')} control={
-          <Toggle checked={s.psiphon} onChange={(v) => store.setSetting('psiphon', v)} />
-        } />
+        <FieldRow
+          title={t('psiphon')}
+          desc={
+            s.connMode === 'subscription' ? t('psiphonSubOnly')
+              : psiphonBusy ? t('psiphonSwitching')
+                : store.conn.connected ? t('psiphonDescConnected')
+                  : t('psiphonDesc')
+          }
+          control={
+            <Toggle
+              checked={s.psiphon}
+              disabled={s.connMode === 'subscription' || psiphonBusy || store.conn.connecting}
+              onChange={(v) => void togglePsiphon(v)}
+            />
+          }
+        />
         {s.psiphon && (
           <>
             <FieldRow
