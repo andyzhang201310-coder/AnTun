@@ -6,6 +6,7 @@ mod net_diag;
 mod node_test;
 mod psiphon;
 mod subscription;
+mod wg_handshake;
 
 use serde::Serialize;
 use std::sync::Mutex;

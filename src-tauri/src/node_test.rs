@@ -59,6 +59,10 @@ struct TestSession {
     child: Child,
     dir: PathBuf,
     ports: Vec<(String, u16)>,
+    /// 节点 id，顺序与配置里的 N0..N{n} 一致（组延迟结果按名字映射回 id）
+    ids: Vec<String>,
+    /// 核心 REST 端口（组延迟调用入口）
+    api_port: u16,
 }
 
 #[derive(Default)]
@@ -112,19 +116,32 @@ fn rename_node(cfg: &str, name: &str) -> String {
     out
 }
 
+/// 测速专用配置。
+///
+/// - `listeners`：每个节点一个本地 HTTP 入口，只给**下载测速**用（同一时刻只测几路，
+///   需要把流量精确归到某个节点）；
+/// - `PROBE` 组：延迟测试走一次 `/group/PROBE/delay`，由核心内部并发调度，
+///   不再从外面套 8 路 curl；
+/// - dns 段是必需的：缺了它 mihomo 会用系统 DNS 解析 CDN 前置域名，
+///   经常解析到不通的边缘地址，节点成片假超时。
 fn render_config(items: &[(SubNode, u16)], api_port: u16) -> String {
     let mut proxies = String::new();
     let mut listeners = String::new();
+    let mut group = String::new();
     for (idx, (node, port)) in items.iter().enumerate() {
         proxies.push_str(&rename_node(&node.config, &format!("N{}", idx)));
         listeners.push_str(&format!(
             "  - name: nt{}\n    type: http\n    port: {}\n    listen: 127.0.0.1\n    proxy: \"N{}\"\n",
             idx, port, idx
         ));
+        group.push_str(&format!("      - \"N{}\"\n", idx));
     }
     format!(
-        "# AnTun 节点测速专用配置（临时文件）\nmode: rule\nlog-level: warning\nipv6: false\nunified-delay: true\nexternal-controller: 127.0.0.1:{}\n\nproxies:\n{}\nlisteners:\n{}\nrules:\n  - MATCH,DIRECT\n",
-        api_port, proxies, listeners
+        "# AnTun 节点测速专用配置（临时文件）\nmode: rule\nlog-level: warning\nipv6: false\nunified-delay: true\ntcp-concurrent: true\nexternal-controller: 127.0.0.1:{api}\n\ndns:\n  enable: true\n  ipv6: false\n  use-hosts: false\n  nameserver:\n    - 8.8.8.8\n    - 1.1.1.1\n  proxy-server-nameserver:\n    - 8.8.8.8\n    - 1.1.1.1\n\nproxies:\n{proxies}\nlisteners:\n{listeners}\nproxy-groups:\n  - name: PROBE\n    type: select\n    proxies:\n{group}\nrules:\n  - MATCH,DIRECT\n",
+        api = api_port,
+        proxies = proxies,
+        listeners = listeners,
+        group = group,
     )
 }
 
@@ -194,38 +211,27 @@ fn pick_valid(exe: &Path, dir: &Path, items: Vec<(SubNode, u16)>) -> Vec<(SubNod
     out
 }
 
-fn curl_delay(port: u16) -> (i64, String) {
+/// 一次组延迟调用：`GET /group/PROBE/delay?url=…&timeout=5000`。
+/// 返回 {代理名: 毫秒}；没答上来的节点不在 map 里。
+fn group_delay(api_port: u16, timeout_ms: u32) -> Result<std::collections::HashMap<String, i64>, String> {
+    let url = format!(
+        "http://127.0.0.1:{}/group/PROBE/delay?url={}&timeout={}",
+        api_port,
+        crate::endpoint_probe::url_encode(DELAY_URL),
+        timeout_ms
+    );
+    // 整组结束时间晚于单个节点的超时，留足余量
+    let max_time = (timeout_ms / 1000 + 20).to_string();
     let out = hidden_command("curl.exe")
-        .args([
-            "-sS",
-            "-o",
-            null_dev(),
-            "--connect-timeout",
-            "3",
-            "--max-time",
-            "6",
-            "-x",
-            &format!("http://127.0.0.1:{}", port),
-            "-w",
-            "%{http_code} %{time_total}",
-            DELAY_URL,
-        ])
-        .output();
-    let Ok(out) = out else {
-        return (-1, "curl 启动失败".into());
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut it = text.split_whitespace();
-    let code = it.next().unwrap_or("").to_string();
-    let secs: f64 = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    if code == "204" || code == "200" {
-        let ms = (secs * 1000.0).round() as i64;
-        (ms.max(1), String::new())
-    } else if code.is_empty() || code == "000" {
-        (-1, "超时或连接失败".into())
-    } else {
-        (-1, format!("HTTP {}", code))
+        .args(["-sS", "--max-time", &max_time, &url])
+        .output()
+        .map_err(|e| format!("curl 启动失败: {}", e))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
+    let body = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<std::collections::HashMap<String, i64>>(body.trim())
+        .map_err(|e| format!("组延迟响应无法解析: {} ({})", e, body.chars().take(80).collect::<String>()))
 }
 
 fn curl_speed_url(port: u16, seconds: u32, url: &str) -> (u64, u64, String) {
@@ -363,7 +369,8 @@ pub async fn node_test_start(
         .map_err(|e| format!("启动测速核心失败: {}", e))?;
 
     let ports: Vec<(String, u16)> = valid.iter().map(|(n, p)| (n.id.clone(), *p)).collect();
-    let session = TestSession { child, dir: base.clone(), ports };
+    let ids: Vec<String> = valid.iter().map(|(n, _)| n.id.clone()).collect();
+    let session = TestSession { child, dir: base.clone(), ports, ids, api_port };
 
     // 等待入口监听：全部就绪即返回，最多 12 秒
     let deadline = Instant::now() + Duration::from_secs(12);
@@ -399,37 +406,36 @@ pub async fn node_test_start(
     Ok(TestStart { tested, skipped })
 }
 
-/// 并发测延迟（默认 8 路）。
+/// 延迟测试：一次组延迟调用，核心内部并发探测所有节点。
+///
+/// 之前是「每节点 8 路 curl、每节点测两次取较小」，400 个节点要几分钟；
+/// 现在整组交给 mihomo 调度，且 `unified-delay: true` 让数字只含连接建立时间，
+/// 和 Clash / Mihomo Party 的口径一致（不再把 DNS + TLS 折进去）。
 #[tauri::command]
 pub async fn node_test_delay(state: tauri::State<'_, NodeTestState>) -> Result<Vec<NodeStat>, String> {
-    let ports: Vec<(String, u16)> = {
+    let (api_port, ids) = {
         let guard = state.0.lock().map_err(|e| e.to_string())?;
         match guard.as_ref() {
-            Some(s) => s.ports.clone(),
+            Some(s) => (s.api_port, s.ids.clone()),
             None => return Err("测速会话未启动".into()),
         }
     };
-    Ok(run_batch(ports, 8, |id, port| {
-        let (mut first, mut err1) = curl_delay(port);
-        // 多节点同时握手时偶发首包超时，失败后再给一次机会
-        if first <= 0 {
-            std::thread::sleep(Duration::from_millis(350));
-            let (retry, err2) = curl_delay(port);
-            if retry > 0 {
-                first = retry;
-                err1 = String::new();
+    // 整组延迟可能要十几秒，放阻塞线程池，避免占住 async 运行时
+    let map = tauri::async_runtime::spawn_blocking(move || group_delay(api_port, 5000))
+        .await
+        .map_err(|e| format!("延迟测试任务失败: {}", e))??;
+    Ok(ids
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| {
+            let ms = map.get(&format!("N{}", idx)).copied().unwrap_or(-1);
+            if ms > 0 {
+                NodeStat { id: id.clone(), delay: ms, speed: 0, bytes: 0, error: String::new() }
             } else {
-                err1 = err2;
+                NodeStat { id: id.clone(), delay: -1, speed: 0, bytes: 0, error: "超时".into() }
             }
-        }
-        if first <= 0 {
-            return NodeStat { delay: first, error: err1, ..NodeStat::fail(id, "") };
-        }
-        // 第一次包含隧道握手，再测一次取较小值更接近真实 RTT
-        let (second, _) = curl_delay(port);
-        let best = if second > 0 { first.min(second) } else { first };
-        NodeStat { delay: best, error: String::new(), ..NodeStat::fail(id, "") }
-    }))
+        })
+        .collect())
 }
 
 /// 并发测下载速度（默认 3 路，同时下载会互相抢带宽，所以并发不宜过高）。
@@ -534,5 +540,27 @@ mod tests {
         assert!(cfg.contains("port: 21001"));
         assert!(cfg.contains("proxy: \"N0\""));
         assert!(cfg.contains("external-controller: 127.0.0.1:29999"));
+    }
+
+    #[test]
+    fn config_exposes_probe_group_and_dns() {
+        let items = vec![(node("a", WG_CFG), 21001u16), (node("b", WG_CFG), 21002)];
+        let cfg = render_config(&items, 29999);
+        // 延迟测试走一次组调用，组里必须包含全部节点
+        assert!(cfg.contains("proxy-groups:\n  - name: PROBE\n    type: select"));
+        assert!(cfg.contains("      - \"N0\""));
+        assert!(cfg.contains("      - \"N1\""));
+        // 缺 dns 段会让 CDN 前置域名走系统 DNS，集体假超时
+        assert!(cfg.contains("proxy-server-nameserver:"));
+        // unified-delay 决定数字口径（连接建立时间，不含 DNS/TLS）
+        assert!(cfg.contains("unified-delay: true"));
+        // 下载测速仍靠 listeners
+        assert!(cfg.contains("listeners:"));
+    }
+
+    #[test]
+    fn group_delay_fails_without_core() {
+        let port = free_port().unwrap_or(40009);
+        assert!(group_delay(port, 300).is_err(), "没有核心时必须报错，不能返回空 map 冒充成功");
     }
 }
