@@ -90,7 +90,6 @@ export function Sidebar() {
             {t(connected ? 'connected' : 'disconnected')}
             {connected && <span className="dot" style={{ marginLeft: 'auto', animation: 'pulse 1.5s infinite' }} />}
           </div>
-          <div className="muted" style={{ fontSize: 10, lineHeight: 1.45, padding: '2px 8px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={t('notice')}>{t('notice')}</div>
           {/* 左下角版本号：与 package.json / 安装包保持一致 */}
           <div className="muted mono" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
@@ -139,8 +138,11 @@ export function TopBar({ children, title, sub }: {
       borderBottom: '1px solid var(--border)', background: 'var(--bg)',
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <h1 className="section-title">{title}</h1>
-        {sub && <p className="section-sub">{sub}</p>}
+        <div className="topbar-headline">
+          <h1 className="section-title">{title}</h1>
+          {sub && <span className="section-sub-inline">{sub}</span>}
+        </div>
+        <p className="section-notice">{t('notice')}</p>
       </div>
       <span className={`badge ${connected ? 'badge-green' : 'badge-gray'}`}>
         <span className="dot" />{t(connected ? 'connected' : connecting ? 'connecting' : 'direct')}

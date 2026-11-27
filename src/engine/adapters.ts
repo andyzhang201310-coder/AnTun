@@ -210,9 +210,15 @@ export class DesktopAdapter implements EngineAdapter {
       upRate: 0,
       downRate: 0,
       startedAt: Date.now(),
-      session: opts.frontConfig
-        ? `${opts.protocol.toUpperCase()} · 订阅前置`
-        : `${opts.protocol.toUpperCase()} · WARP`,
+      session: (() => {
+        if (!opts.frontConfig) return `${opts.protocol.toUpperCase()} · WARP`
+        const type = (opts.frontType || 'NODE').toUpperCase()
+        // 节点直接出口时 WARP 不参与（除非开启经 WARP 承载），会话标签不能写协议名
+        if (opts.settings.subExit === 'node') {
+          return opts.settings.subViaWarp ? `${type} · 经 WARP 承载` : `${type} · 节点出口`
+        }
+        return `${opts.protocol.toUpperCase()} · 订阅前置`
+      })(),
     }
   }
 

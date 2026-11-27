@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode, CSSProperties } from 'react'
-import { ChevronDown, Languages, Moon, ShieldCheck, Sun } from 'lucide-react'
+import { ChevronDown, Languages, Lock, Moon, ShieldCheck, Sun } from 'lucide-react'
 import type { Protocol, Theme, Lang } from '../types'
 
 export function Card({ title, sub, icon, children, className = '', style }: {
@@ -90,15 +90,26 @@ export function ProtocolPicker({ value, onChange, label }: {
 }
 
 /** 首页协议下拉框：盾牌图标 + 当前协议 + 展开箭头 */
-export function ProtocolSelect({ value, onChange, label, availableLabel = '可用', compact = false }: {
+export function ProtocolSelect({ value, onChange, label, availableLabel = '可用', compact = false, disabled = false, valueText, hint, lockLabel }: {
   value: Protocol
   onChange: (p: Protocol) => void
   label?: string
   availableLabel?: string
   compact?: boolean
+  /** 只读：当前连接模式下 WARP 协议不参与（如订阅节点直接出口） */
+  disabled?: boolean
+  /** 只读时显示的文案（例如订阅节点自己的 VLESS） */
+  valueText?: string
+  hint?: string
+  lockLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  // 进入只读状态时收起菜单，避免残留在已禁用的触发器下面
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
 
   useEffect(() => {
     if (!open) return
@@ -115,20 +126,26 @@ export function ProtocolSelect({ value, onChange, label, availableLabel = '可�
   }, [open])
 
   return (
-    <div ref={rootRef} className={`proto-select ${compact ? 'compact' : ''}`}>
+    <div ref={rootRef} className={`proto-select ${compact ? 'compact' : ''} ${disabled ? 'disabled' : ''}`}>
       {label && <div className="muted proto-label">{label}</div>}
       <button
         type="button"
         className={`proto-trigger ${open ? 'open' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-disabled={disabled}
+        disabled={disabled}
+        title={disabled ? hint : undefined}
+        onClick={() => { if (!disabled) setOpen((v) => !v) }}
       >
         <ShieldCheck size={compact ? 15 : 18} className="proto-shield" />
-        <span className="proto-value">{PROTOCOL_LABELS[value]}</span>
-        <ChevronDown size={compact ? 14 : 16} className={`proto-chevron ${open ? 'open' : ''}`} />
+        <span className="proto-value">{valueText ?? PROTOCOL_LABELS[value]}</span>
+        {disabled
+          ? <span className="proto-lock"><Lock size={compact ? 11 : 12} />{lockLabel ?? ''}</span>
+          : <ChevronDown size={compact ? 14 : 16} className={`proto-chevron ${open ? 'open' : ''}`} />}
       </button>
-      {open && (
+      {hint && <div className="proto-hint">{hint}</div>}
+      {open && !disabled && (
         <div className="proto-menu" role="listbox">
           {PROTOCOLS.map((p) => (
             <button

@@ -160,6 +160,8 @@ export interface ConnectOptions {
   protocol: Protocol
   endpoint?: Endpoint | null
   frontConfig?: string
+  /** 订阅前置节点的协议类型（vless / vmess / trojan …），仅用于会话标签 */
+  frontType?: string
   captureMode: CaptureMode
   psiphon: boolean
   warpInWarp: boolean

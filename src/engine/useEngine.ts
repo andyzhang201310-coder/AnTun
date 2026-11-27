@@ -104,6 +104,7 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
         protocol: s.settings.proto,
         endpoint: ep,
         frontConfig: frontNode?.config,
+        frontType: frontNode?.nodeType,
         captureMode: s.settings.captureMode,
         psiphon: s.settings.psiphon,
         warpInWarp: s.settings.warpInWarp,

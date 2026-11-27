@@ -26,6 +26,14 @@ export function HomePage() {
   const pinned = endpoints.find((e) => e.id === pinnedId)
   const subNode = settings.connMode === 'subscription' ? subNodes.find((n) => n.id === settings.frontNodeId) : undefined
   const subStat = subNode ? nodeStats[subNode.id] : undefined
+  /**
+   * 订阅模式「节点出口」：隧道完全由订阅节点自己的协议承担（例如 VLESS），
+   * 此时 settings.proto 只留在配置里、不参与建链，协议下拉框必须降级为只读展示，
+   * 否则界面会让人误以为 GOOL / AWG 之类被选中并生效。
+   * 若开启「节点流量经 WARP 承载」或订阅出口选 WARP，则 WARP 协议仍起作用。
+   */
+  const nodeExit = settings.connMode === 'subscription' && settings.subExit === 'node' && !settings.subViaWarp
+  const subProtoLabel = subNode ? subNode.nodeType.toUpperCase() : t('followSubNode')
   // 下拉框当前值：订阅模式指向节点，WARP 模式指向锁定端点或自动择优
   const nodeValue = settings.connMode === 'subscription'
     ? (subNode ? `sub:${subNode.id}` : 'sub:none')
@@ -200,7 +208,16 @@ export function HomePage() {
         </div>
 
         <div className="stack home-options" style={{ gap: 16 }}>
-          <ProtocolSelect value={settings.proto} onChange={(p) => store.setSetting('proto', p)} label={t('protocol')} availableLabel={t('available')} />
+          <ProtocolSelect
+            value={settings.proto}
+            onChange={(p) => store.setSetting('proto', p)}
+            label={t(nodeExit ? 'protocolLocked' : 'protocol')}
+            availableLabel={t('available')}
+            disabled={nodeExit}
+            valueText={nodeExit ? subProtoLabel : undefined}
+            lockLabel={nodeExit ? t('subExitTag') : undefined}
+            hint={nodeExit ? t('protoNodeExitHint') : undefined}
+          />
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t('connectOptions')}</div>
             <Card style={{ padding: '6px 16px' }}>
