@@ -718,21 +718,66 @@ pub struct CoreTraffic {
     pub down_total: u64,
 }
 
-/// 读取核心 REST API 的流量快照。/traffic 是流式接口，只取第一行即可。
-#[tauri::command]
-pub fn core_traffic(api_port: u16) -> Result<CoreTraffic, String> {
-    let url = format!("http://127.0.0.1:{}/traffic", api_port);
-    let out = hidden_command("curl.exe")
-        .args(["-s", "--max-time", "2", &url])
-        .output()
+/// 直接从核心 REST API 读第一行 /traffic（NDJSON 流），读到就断开。
+///
+/// 之前这里用 `curl.exe -s --max-time 2 /traffic`：该接口是**长连接流**，
+/// curl 会一直等到 2 秒超时才退出；而同步的 `#[tauri::command]` 跑在主线程上，
+/// 于是连接后每秒都把窗口消息循环堵住约 2 秒 —— 表现就是点菜单、拖动窗口明显卡顿。
+/// 改成直连 127.0.0.1 读一行就返回，通常 1～5ms。
+fn read_traffic_line(api_port: u16) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write as IoWrite};
+    use std::net::{SocketAddr, TcpStream};
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], api_port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(600))
+        .map_err(|_| "核心流量接口不可用".to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
+    let req = format!(
+        "GET /traffic HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        api_port
+    );
+    stream
+        .write_all(req.as_bytes())
         .map_err(|e| format!("读取流量失败: {}", e))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().next().unwrap_or("").trim();
-    if line.is_empty() {
-        return Err("核心流量接口不可用".into());
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut in_body = false;
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("读取流量失败: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        let text = line.trim();
+        if !in_body {
+            // 跳过响应头（chunked 编码下正文前还会有一行长度）
+            if text.is_empty() {
+                in_body = true;
+            }
+            continue;
+        }
+        if text.starts_with('{') {
+            return Ok(text.to_string());
+        }
     }
+    Err("核心流量接口不可用".into())
+}
+
+/// 读取核心 REST API 的流量快照。
+///
+/// 命令本身是 async 且把阻塞 IO 放进 spawn_blocking：
+/// 绝不能让它在主线程上等网络，否则连接期间窗口会周期性卡死。
+#[tauri::command]
+pub async fn core_traffic(api_port: u16) -> Result<CoreTraffic, String> {
+    let line = tauri::async_runtime::spawn_blocking(move || read_traffic_line(api_port))
+        .await
+        .map_err(|e| format!("读取流量失败: {}", e))??;
     let value: serde_json::Value =
-        serde_json::from_str(line).map_err(|e| format!("流量数据解析失败: {}", e))?;
+        serde_json::from_str(&line).map_err(|e| format!("流量数据解析失败: {}", e))?;
     Ok(CoreTraffic {
         up: value.get("up").and_then(|v| v.as_u64()).unwrap_or(0),
         down: value.get("down").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -1045,28 +1090,13 @@ pub async fn probe_status(
     }
 
     let proxy_url = format!("http://127.0.0.1:{}", port);
-    if lite.unwrap_or(false) {
-        return match probe_alive(&proxy_url) {
-            Ok(ms) => Ok(CoreResult {
-                ok: true,
-                exit_ip: String::new(),
-                country: String::new(),
-                city: String::new(),
-                colo: String::new(),
-                latency: ms,
-                error: String::new(),
-                fatal: false,
-            }),
-            Err(e) => Ok(CoreResult::fail(e)),
-        };
-    }
+    let lite = lite.unwrap_or(false);
 
-    match probe_exit(&proxy_url) {
-        Ok(r) => Ok(r),
-        Err(e) => {
-            // trace 可能被限速或偶发超时：再用一次轻量 204 复核，
-            // 只要还能出网就当作存活，避免单次抖动被误判为断线。
-            match probe_alive(&proxy_url) {
+    // 探测内部是 curl 子进程 + 最长 8 秒超时，必须放到阻塞线程池，
+    // 否则会占住 async 运行时的工作线程，和流量读取、窗口事件抢资源。
+    tauri::async_runtime::spawn_blocking(move || {
+        if lite {
+            return match probe_alive(&proxy_url) {
                 Ok(ms) => Ok(CoreResult {
                     ok: true,
                     exit_ip: String::new(),
@@ -1077,10 +1107,33 @@ pub async fn probe_status(
                     error: String::new(),
                     fatal: false,
                 }),
-                Err(_) => Ok(CoreResult::fail(e)),
+                Err(e) => Ok(CoreResult::fail(e)),
+            };
+        }
+
+        match probe_exit(&proxy_url) {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                // trace 可能被限速或偶发超时：再用一次轻量 204 复核，
+                // 只要还能出网就当作存活，避免单次抖动被误判为断线。
+                match probe_alive(&proxy_url) {
+                    Ok(ms) => Ok(CoreResult {
+                        ok: true,
+                        exit_ip: String::new(),
+                        country: String::new(),
+                        city: String::new(),
+                        colo: String::new(),
+                        latency: ms,
+                        error: String::new(),
+                        fatal: false,
+                    }),
+                    Err(_) => Ok(CoreResult::fail(e)),
+                }
             }
         }
-    }
+    })
+    .await
+    .map_err(|e| format!("探测任务失败: {}", e))?
 }
 
 #[cfg(test)]
@@ -1137,5 +1190,36 @@ mod tests {
         let cfg = cfg_with("preset", true, "warp", false);
         assert!(cfg.contains("dialer-proxy: \"SUB-NODE\""));
         assert!(cfg.contains("      - WARP"));
+    }
+
+    /// /traffic 是长连接流：核心发完一行后不会关连接。
+    /// 读取必须拿到第一行就返回，不能像 `curl --max-time 2` 那样等满 2 秒。
+    #[test]
+    fn traffic_line_returns_before_stream_ends() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n41\r\n{\"up\":10,\"down\":20,\"upTotal\":100,\"downTotal\":200}\r\n",
+                );
+                let _ = s.flush();
+                // 模拟 mihomo：连接保持打开，后续每秒一行
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let t0 = std::time::Instant::now();
+        let line = read_traffic_line(port).expect("应读到第一行 JSON");
+        let elapsed = t0.elapsed();
+        assert!(line.starts_with('{'), "line={line}");
+        assert!(line.contains("\"up\""));
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "读取耗时 {elapsed:?}，仍在等流结束"
+        );
     }
 }
