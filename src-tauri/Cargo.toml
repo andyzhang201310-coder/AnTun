@@ -1,6 +1,6 @@
 [package]
 name = "antun"
-version = "1.6.7"
+version = "1.6.8"
 description = "AnTun - lightweight cross-platform WARP client"
 authors = ["AnTun"]
 edition = "2021"

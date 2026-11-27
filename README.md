@@ -72,9 +72,11 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.6.7_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.6.8_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
+
+**安装与升级**：安装包一律**就地覆盖安装**。`src-tauri/nsis/installer.nsi` 是从 Tauri 上游模板派生的自定义模板，删掉了上游那个「重新安装方式」选择页（该页升级时默认预选「卸载后再安装」，会先跑旧版卸载程序删掉文件、快捷方式和卸载注册表项，再重新装一遍）。覆盖安装直接替换 `%LOCALAPPDATA%\AnTun` 下的程序文件、重建快捷方式与卸载项；`%APPDATA%\com.antun.client` 里的凭证、订阅、设置不在安装目录内，升级全程不读写。需要彻底清理时走控制面板卸载，卸载流程本身未改动。
 
 ### 真实连接（非演示）
 
@@ -122,7 +124,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.6.7**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.6.8**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml
