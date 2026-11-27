@@ -16,6 +16,8 @@ export function HomePage() {
   const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
   const { scan, probeSubNodes, connect, disconnect, cancel } = useEngine()
   const [switching, setSwitching] = useState(false)
+  /** 本次断开重连的原因（空 = 换节点），用于把提示文案说清楚 */
+  const [switchNote, setSwitchNote] = useState('')
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
 
   // 首页也需要候选端点：挂载后延迟一次真实探测，避免和首屏渲染抢资源
@@ -141,15 +143,30 @@ export function HomePage() {
   }
 
   /** 已连接时切换节点：先断开（还原系统代理）再用新节点重连 */
-  const reconnectIfNeeded = async () => {
+  const reconnectIfNeeded = async (note = '') => {
     if (!conn.connected) return
+    setSwitchNote(note)
     setSwitching(true)
     try {
       await disconnect()
       await connect()
     } finally {
       setSwitching(false)
+      setSwitchNote('')
     }
+  }
+
+  /**
+   * 切换 Psiphon 出口。
+   * 出口是在连接时写进核心配置的（render_config 里 PSIPHON 出站 + outbound: PSIPHON），
+   * 核心跑起来之后改设置不会影响已建的隧道，所以已连接时必须断开重连才生效。
+   */
+  const togglePsiphon = async (v: boolean) => {
+    if (switching || conn.connecting) return
+    store.setSetting('psiphon', v)
+    store.log('INFO', `psiphon -> ${v ? 'on' : 'off'}`)
+    store.addHistory(`psiphon ${v ? 'on' : 'off'}`)
+    await reconnectIfNeeded(t('psiphonSwitching'))
   }
 
   const pickNode = async (value: string) => {
@@ -257,7 +274,7 @@ export function HomePage() {
               <div className="muted" style={{ fontSize: 11.5, color: 'var(--warn)' }}>{t('noNodeSelected')}</div>
             )}
             <div className="muted home-node-pick-hint">
-              {switching ? t('switching')
+              {switching ? (switchNote || t('switching'))
                 : conn.connected ? t('switchReconnect')
                   : settings.connMode === 'subscription'
                     ? (subNode ? t('subNodeActive') : t('modeSubscriptionDesc'))
@@ -309,12 +326,22 @@ export function HomePage() {
                 control={<Toggle checked={settings.rescan} onChange={(v) => store.setSetting('rescan', v)} />} />
               <FieldRow
                 title={t('psiphon')}
-                desc={settings.connMode === 'subscription' ? t('psiphonSubOnly') : t('psiphonDesc')}
+                desc={
+                  settings.connMode === 'subscription'
+                    ? t('psiphonSubOnly')
+                    : switching
+                      ? t('psiphonSwitching')
+                      : conn.connecting
+                        ? t('psiphonBusy')
+                        : conn.connected
+                          ? t('psiphonDescConnected')
+                          : t('psiphonDesc')
+                }
                 control={
                   <Toggle
                     checked={settings.psiphon}
-                    disabled={settings.connMode === 'subscription'}
-                    onChange={(v) => store.setSetting('psiphon', v)}
+                    disabled={settings.connMode === 'subscription' || conn.connecting || switching}
+                    onChange={(v) => void togglePsiphon(v)}
                   />
                 }
               />

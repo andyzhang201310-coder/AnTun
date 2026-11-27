@@ -1,7 +1,7 @@
 {
   "name": "antun",
   "private": true,
-  "version": "1.7.4",
+  "version": "1.7.5",
   "license": "MIT",
   "description": "AnTun — 轻量跨端 WARP 网络客户端",
   "type": "module",

@@ -35,7 +35,7 @@ AnTun 采用 **Web 技术栈一次开发、多端复用**：界面与逻辑只�
 - **收藏**：把测出速度好的节点存下来（连分享链接一起存，订阅刷新或删除都不影响收藏项）。支持单个/批量测延迟、单个/批量测速、单个与批量删除、一键选用（已连接时同样自动断开重连），以及「从订阅导入」批量收录。节点名前的国旗与延迟、速度都按真实测试结果展示，测不出的项留空而不是填 0。模式页的「订阅节点」列表每行右侧有星标按钮，看到好节点可以直接收藏（同时把当前测得的延迟/速度带进去，再点一次取消收藏），点星标不会误切当前前置节点。
 - **规则**：代理模式（自定义 / 绕过大陆 / 全局）、规则增删启停、直连/代理域名清单。
 - **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为、DNS 与出口（DNS 预设 / 自定义 / 关闭 + **DNS 防泄漏**：fake-ip 与 IP 形式 DoH 经隧道解析；Psiphon 出口地区采用“自动选择 + ISO 国家码”列表，连接时写入 `EgressRegion`；选到 Psiphon 未覆盖的地区会立刻报错并列出可选地区，而不是让用户空等）、**网络诊断**（DNS 泄漏检测 + ChatGPT / Gemini / Claude 站点连通性检测），全部设置项持久化到本机。订阅模式「节点出口」且未开启 WARP 承载时，设置页的「协议」也会降级为只读（显示订阅节点自己的协议）；原来的「外层协议」从未传入后端、`render_config` 也不读，已在 1.7.1 移除。
-- **Psiphon 出口**（首页「连接选项」）：开启后先拉起内置 `psiphon.exe`（官方 tunnel-core），等它建立隧道，再把 mihomo 的最终出站指向它的本地 SOCKS 端口 —— 出口 IP 来自 Psiphon 网络，**WARP 不再参与**（两者互斥，订阅模式下该开关禁用）。内置 `server_list.dat` 是 legacy 十六进制格式，启动时解析成 100 条 server entry 注入 `ServerList`，避免首次启动 `entries 0` 只能干等远程列表；同时清掉官方配置里指向 `127.0.0.1:7890` 的 `UpstreamProxyURL`（作者本机的代理，换台机器会导致完全连不上），端口动态分配。单次尝试失败会自动重启进程换一批服务器再试（实测同一网络下第一次可能 89 次 ConnectingServer 全失败，重启后 15~22 秒即通）。进程绑定 Windows Job 对象，断开或退出时一并结束。
+- **Psiphon 出口**（首页「连接选项」）：开启后先拉起内置 `psiphon.exe`（官方 tunnel-core），等它建立隧道，再把 mihomo 的最终出站指向它的本地 SOCKS 端口 —— 出口 IP 来自 Psiphon 网络，**WARP 不再参与**（两者互斥，订阅模式下该开关禁用）。**已连接时切换这个开关会自动断开重连来应用新出口**（出口是在连接时写进核心配置的，核心跑起来后无法热改），期间提示「正在切换 Psiphon 出口（断开重连）」，圆环回到连接中；连接进行中开关暂时禁用，避免改到一半仍在跑旧配置。内置 `server_list.dat` 是 legacy 十六进制格式，启动时解析成 100 条 server entry 注入 `ServerList`，避免首次启动 `entries 0` 只能干等远程列表；同时清掉官方配置里指向 `127.0.0.1:7890` 的 `UpstreamProxyURL`（作者本机的代理，换台机器会导致完全连不上），端口动态分配。单次尝试失败会自动重启进程换一批服务器再试（实测同一网络下第一次可能 89 次 ConnectingServer 全失败，重启后 15~22 秒即通）。进程绑定 Windows Job 对象，断开或退出时一并结束。
 - **关于**：仅保留品牌、简介与项目主页。
 - **日志**：运行日志、连接历史、可复制的诊断信息。
 - 浅色 / 深色 / 跟随系统主题，中文 / English 双语，手机 / 桌面 / TV 三档响应式布局，TV 遥控器焦点态。
@@ -76,7 +76,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.7.4_x64-setup.exe` —— 默认内置核心，安装包约 **22.8 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.7.5_x64-setup.exe` —— 默认内置核心，安装包约 **22.8 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -128,7 +128,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.7.4**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.7.5**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml
@@ -138,7 +138,7 @@ npm run version:set -- 1.3.0   # 指定版本
 > registry = "sparse+https://rsproxy.cn/index/"
 > ```
 
-验证方式：启动 exe 前设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`，再运行 `node scripts/verify-tauri.cjs` 做基础交互验证，`node scripts/verify-protocols.cjs` 逐项验证六种协议的真实出口，或 `node scripts/verify-updates.cjs` 验证首页按钮、订阅导入与关于页信息（需先在本机 8899 端口提供 `scripts/fixtures/test-subscription.yaml`）；`node scripts/verify-latency-region-1_4.cjs` 验证实时延迟数值与 Psiphon 出口地区写入，`node scripts/verify-latency-1_4.cjs` 验证连接后波形图上的毫秒数，`node scripts/verify-net-1_5.cjs` 验证 DNS 防泄漏落盘配置、DNS 泄漏检测与 AI 站点连通性，`node scripts/verify-node-test-1_6.cjs` 验证订阅节点一键测速（延迟 + 速度）与被拒节点的标记。
+验证方式：启动 exe 前设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`，再运行 `node scripts/verify-tauri.cjs` 做基础交互验证，`node scripts/verify-protocols.cjs` 逐项验证六种协议的真实出口，或 `node scripts/verify-updates.cjs` 验证首页按钮、订阅导入与关于页信息（需先在本机 8899 端口提供 `scripts/fixtures/test-subscription.yaml`）；`node scripts/verify-latency-region-1_4.cjs` 验证实时延迟数值与 Psiphon 出口地区写入，`node scripts/verify-latency-1_4.cjs` 验证连接后波形图上的毫秒数，`node scripts/verify-net-1_5.cjs` 验证 DNS 防泄漏落盘配置、DNS 泄漏检测与 AI 站点连通性，`node scripts/verify-node-test-1_6.cjs` 验证订阅节点一键测速（延迟 + 速度）与被拒节点的标记；`node scripts/verify-psiphon-live-switch.cjs` 验证已连接时切换 Psiphon 开关会自动断开重连并更换出口（含 `psiphon.exe` 生命周期与出口 IP 变化）。
 
 ## 开发命令
 

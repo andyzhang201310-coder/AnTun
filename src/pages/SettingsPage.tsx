@@ -86,7 +86,9 @@ export function SettingsPage() {
     if (!isDesk || !desk?.setPsiphonRegion) return
     try {
       await desk.setPsiphonRegion(code)
-      setRegionMsg({ ok: true, text: t('regionSaved') })
+      // 地区同样是在连接时写进核心配置的，已连接时提示需要重连才生效
+      const live = store.conn.connected
+      setRegionMsg({ ok: true, text: t(live ? 'regionSavedNeedReconnect' : 'regionSaved') })
       store.log('INFO', `psiphon egress region -> ${code || 'auto'}`)
     } catch (e: any) {
       setRegionMsg({ ok: false, text: t('regionSaveFail', { msg: e?.message || String(e) }) })
