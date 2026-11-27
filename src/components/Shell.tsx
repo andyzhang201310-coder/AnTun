@@ -15,6 +15,9 @@ const NAV: { id: PageId; key: string; icon: typeof Home }[] = [
   { id: 'about', key: 'navAbout', icon: Info },
 ]
 
+/** 构建时由 vite 从 package.json 注入 */
+export const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev'
+
 function PlatformIcon({ p }: { p: Platform }) {
   if (p === 'android') return <Smartphone size={14} />
   if (p === 'tv') return <Tv size={14} />
@@ -23,7 +26,12 @@ function PlatformIcon({ p }: { p: Platform }) {
 }
 
 export function Sidebar() {
-  const { page, setPage, settings, conn, platform } = useStore()
+  // 逐项订阅：连接后的流量/延迟刷新不再让侧栏跟着重渲染
+  const page = useStore((s) => s.page)
+  const setPage = useStore((s) => s.setPage)
+  const settings = useStore((s) => s.settings)
+  const platform = useStore((s) => s.platform)
+  const connected = useStore((s) => s.conn.connected)
   const t = (k: string) => tr(k, settings.lang)
 
   return (
@@ -75,14 +83,22 @@ export function Sidebar() {
           </div>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 12,
-            background: conn.connected ? 'var(--success-soft)' : 'var(--surface-2)',
-            color: conn.connected ? 'var(--success)' : 'var(--text-3)', fontSize: 12, fontWeight: 700,
+            background: connected ? 'var(--success-soft)' : 'var(--surface-2)',
+            color: connected ? 'var(--success)' : 'var(--text-3)', fontSize: 12, fontWeight: 700,
           }}>
-            {conn.connected ? <Wifi size={15} /> : <WifiOff size={15} />}
-            {t(conn.connected ? 'connected' : 'disconnected')}
-            {conn.connected && <span className="dot" style={{ marginLeft: 'auto', animation: 'pulse 1.5s infinite' }} />}
+            {connected ? <Wifi size={15} /> : <WifiOff size={15} />}
+            {t(connected ? 'connected' : 'disconnected')}
+            {connected && <span className="dot" style={{ marginLeft: 'auto', animation: 'pulse 1.5s infinite' }} />}
           </div>
           <div className="muted" style={{ fontSize: 10, lineHeight: 1.45, padding: '2px 8px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }} title={t('notice')}>{t('notice')}</div>
+          {/* 左下角版本号：与 package.json / 安装包保持一致 */}
+          <div className="muted mono" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+            padding: '0 8px', fontSize: 10.5, letterSpacing: '.2px',
+          }}>
+            <span>AnTun</span>
+            <span title={`${t('version')} ${APP_VERSION}`}>v{APP_VERSION}</span>
+          </div>
         </div>
       </aside>
 
@@ -113,7 +129,9 @@ export function Sidebar() {
 export function TopBar({ children, title, sub }: {
   children?: ReactNode; title: string; sub?: string
 }) {
-  const { settings, conn } = useStore()
+  const settings = useStore((s) => s.settings)
+  const connected = useStore((s) => s.conn.connected)
+  const connecting = useStore((s) => s.conn.connecting)
   const t = (k: string) => tr(k, settings.lang)
   return (
     <header style={{
@@ -124,8 +142,8 @@ export function TopBar({ children, title, sub }: {
         <h1 className="section-title">{title}</h1>
         {sub && <p className="section-sub">{sub}</p>}
       </div>
-      <span className={`badge ${conn.connected ? 'badge-green' : 'badge-gray'}`}>
-        <span className="dot" />{t(conn.connected ? 'connected' : conn.connecting ? 'connecting' : 'direct')}
+      <span className={`badge ${connected ? 'badge-green' : 'badge-gray'}`}>
+        <span className="dot" />{t(connected ? 'connected' : connecting ? 'connecting' : 'direct')}
       </span>
       <div className="topbar-controls">{children}</div>
     </header>

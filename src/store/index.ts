@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import type { StateStorage } from 'zustand/middleware'
 import type {
   Settings, ConnState, Endpoint, Rule, LogEntry, HistoryStep,
   LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat,
@@ -86,7 +87,6 @@ interface AppStore {
   rules: Rule[]
   logs: LogEntry[]
   history: HistoryStep[]
-  latencyPoints: LatencyPoint[]
   platform: Platform
   // 动作
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void
@@ -109,8 +109,51 @@ interface AppStore {
   removeRule: (id: string) => void
   log: (level: LogEntry['level'], message: string) => void
   addHistory: (text: string, ok?: boolean) => void
-  pushLatency: (p: LatencyPoint) => void
   clearLogs: () => void
+}
+
+/**
+ * 合并落盘：订阅节点每条都带完整配置（YAML 可能几 KB），
+ * zustand persist 默认每次 set 都同步 JSON.stringify + 写 localStorage。
+ * 节点多时，一次切换页面（page 也持久化）就会卡主线程几百毫秒，
+ * 连接后的流量刷新更是每秒写一次。这里改成 500ms 合并写入。
+ */
+const pendingWrites = new Map<string, string>()
+let flushTimer: number | null = null
+
+export function flushPersist() {
+  if (flushTimer !== null) {
+    window.clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  for (const [name, value] of pendingWrites) {
+    try { localStorage.setItem(name, value) } catch { /* 存储已满时忽略，避免阻塞 UI */ }
+  }
+  pendingWrites.clear()
+}
+
+const persistStorage: StateStorage = {
+  getItem: (name) => {
+    try { return localStorage.getItem(name) } catch { return null }
+  },
+  setItem: (name, value) => {
+    pendingWrites.set(name, value)
+    if (typeof window === 'undefined') return
+    if (flushTimer !== null) window.clearTimeout(flushTimer)
+    flushTimer = window.setTimeout(flushPersist, 500)
+  },
+  removeItem: (name) => {
+    pendingWrites.delete(name)
+    try { localStorage.removeItem(name) } catch { /* ignore */ }
+  },
+}
+
+if (typeof window !== 'undefined') {
+  // 关闭/刷新前把待写入内容落盘，避免丢设置
+  window.addEventListener('pagehide', flushPersist)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPersist()
+  })
 }
 
 export const useStore = create<AppStore>()(
@@ -129,7 +172,6 @@ export const useStore = create<AppStore>()(
       rules: DEFAULT_RULES,
       logs: [],
       history: [],
-      latencyPoints: [],
       platform: 'web',
 
       setSetting: (key, value) => set((s) => ({ settings: { ...s.settings, [key]: value } })),
@@ -182,11 +224,11 @@ export const useStore = create<AppStore>()(
       addHistory: (text, ok = true) => set((s) => ({
         history: [...s.history.slice(-99), { id: newId(), time: Date.now(), text, ok }],
       })),
-      pushLatency: (p) => set((s) => ({ latencyPoints: [...s.latencyPoints.slice(-59), p] })),
       clearLogs: () => set({ logs: [], history: [] }),
     }),
     {
       name: 'antun-prefs',
+      storage: createJSONStorage(() => persistStorage),
       // 老版本存档缺少新增设置项：用默认值补齐，避免新功能读到 undefined
       merge: (persisted, current) => {
         const saved = (persisted || {}) as Partial<typeof current>
@@ -208,6 +250,37 @@ export const useStore = create<AppStore>()(
     },
   ),
 )
+
+/**
+ * 实时数据单独一个 store（不持久化、不参与 antun-prefs）。
+ * 连接期间这里每秒都会更新，如果混在主 store 里，所有 `useStore()` 的页面
+ * 都会被一起重渲染（节点列表几百行时尤其明显），并触发一次大 JSON 落盘。
+ */
+interface LiveStore {
+  up: number
+  down: number
+  upRate: number
+  downRate: number
+  latencyPoints: LatencyPoint[]
+  /** 每秒心跳：即使读取流量失败，首页的会话时长也能继续走字 */
+  tick: number
+  setTraffic: (t: { up: number; down: number; upRate: number; downRate: number }) => void
+  pushLatency: (p: LatencyPoint) => void
+  bumpTick: () => void
+  resetLive: () => void
+}
+
+const EMPTY_LIVE = { up: 0, down: 0, upRate: 0, downRate: 0 }
+
+export const useLive = create<LiveStore>()((set) => ({
+  ...EMPTY_LIVE,
+  latencyPoints: [],
+  tick: 0,
+  setTraffic: (t) => set(t),
+  pushLatency: (p) => set((s) => ({ latencyPoints: [...s.latencyPoints.slice(-59), p] })),
+  bumpTick: () => set((s) => ({ tick: s.tick + 1 })),
+  resetLive: () => set({ ...EMPTY_LIVE, latencyPoints: [], tick: 0 }),
+}))
 
 /** 把语言/主题同步到 document（供主题切换调用） */
 export function applyAppearance(theme: Theme, lang: Lang, systemDark: boolean) {

@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle } from 'lucide-react'
-import { useStore } from '../store'
+import { useStore, useLive } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
 import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, formatBytes, formatRate, formatDuration } from '../components/ui'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, latencyPoints, pinnedId, subNodes, nodeStats } = store
+  const { settings, conn, endpoints, scanning, pinnedId, subNodes, nodeStats } = store
+  // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
+  const { up, down, upRate, downRate, latencyPoints } = useLive()
   const { scan, connect, disconnect } = useEngine()
   const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
@@ -203,13 +205,13 @@ export function HomePage() {
           <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
             <div>
               <div className="muted" style={{ fontSize: 11 }}><ArrowUpRight size={12} style={{ verticalAlign: 'middle' }} /> {t('upRate')}</div>
-              <div className="strong mono" style={{ fontSize: 20, marginTop: 4 }}>{formatRate(conn.upRate)}</div>
-              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(conn.up)}</div>
+              <div className="strong mono" style={{ fontSize: 20, marginTop: 4 }}>{formatRate(upRate)}</div>
+              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(up)}</div>
             </div>
             <div>
               <div className="muted" style={{ fontSize: 11 }}><ArrowDownRight size={12} style={{ verticalAlign: 'middle' }} /> {t('downRate')}</div>
-              <div className="strong mono" style={{ fontSize: 20, marginTop: 4, color: 'var(--brand)' }}>{formatRate(conn.downRate)}</div>
-              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(conn.down)}</div>
+              <div className="strong mono" style={{ fontSize: 20, marginTop: 4, color: 'var(--brand)' }}>{formatRate(downRate)}</div>
+              <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(down)}</div>
             </div>
           </div>
         </Card>

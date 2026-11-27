@@ -24,14 +24,15 @@ const PAGE_META: Record<PageId, { key: string; sub: string }> = {
 }
 
 function useAppearance() {
-  const { settings } = useStore()
+  const theme = useStore((s) => s.settings.theme)
+  const lang = useStore((s) => s.settings.lang)
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => applyAppearance(settings.theme, settings.lang, mq.matches)
+    const apply = () => applyAppearance(theme, lang, mq.matches)
     apply()
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
-  }, [settings.theme, settings.lang])
+  }, [theme, lang])
 }
 
 /**
@@ -65,8 +66,10 @@ function usePlatformDetect() {
 export default function App() {
   useAppearance()
   usePlatformDetect()
-  const store = useStore()
-  const { settings, page, setSetting } = store
+  // 逐项订阅：连接后的实时数据在独立的 useLive store 里，这里不会被牵着重渲染
+  const settings = useStore((s) => s.settings)
+  const page = useStore((s) => s.page)
+  const setSetting = useStore((s) => s.setSetting)
   const t = (k: string) => tr(k, settings.lang)
   const [showNotice, setShowNotice] = useState(() => !localStorage.getItem('antun-notice-seen'))
 

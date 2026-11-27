@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useStore } from '../store'
+import { useCallback, useEffect } from 'react'
+import { useStore, useLive, flushPersist } from '../store'
 import { createAdapter } from './adapters'
 import { initDesktopBridge } from '../desktop'
 import type { EngineAdapter, ConnectOptions, ConnState } from '../types'
@@ -41,6 +41,7 @@ async function engineDisconnect(): Promise<void> {
     try { await adapter.disconnect() } catch { /* 核心可能已退出 */ }
   }
   useStore.getState().setConn(CLEARED_CONN)
+  useLive.getState().resetLive()
   ;(window as any)._antunSyncTray?.()
   s.log('INFO', 'disconnected')
   s.addHistory('disconnected')
@@ -75,8 +76,9 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
     s.addHistory('probe endpoint -> verify exit')
     const state = await adapter.connect(opts)
     useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
+    useLive.getState().resetLive()
     ;(window as any)._antunSyncTray?.()
-    adapter.probe((p) => useStore.getState().pushLatency(p))
+    adapter.probe((p) => useLive.getState().pushLatency(p))
     s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
     s.addHistory(`connected ${state.session}`)
     return true
@@ -93,6 +95,7 @@ async function handleTunnelLost(detail: string) {
   s.log('WARN', `tunnel lost: ${detail}`)
   s.addHistory('tunnel lost', false)
   s.setConn(CLEARED_CONN)
+  useLive.getState().resetLive()
   ;(window as any)._antunSyncTray?.()
 
   if (!s.settings.autoRepair) {
@@ -130,19 +133,100 @@ function bindTunnelWatcher() {
 // 模块加载即注册：即使从「设置」页启动（首页未挂载）也能自动重连
 bindTunnelWatcher()
 
+// ============ 实时速率（全局单例） ============
+// 原来这段在 useEngine 内部：每个页面挂载都起一份 1s 定时器，
+// 连接后每个页面都在轮询核心 /traffic 并 setState（还会触发持久化写盘），
+// 切菜单时主线程被占住，表现为明显卡顿。
+// 现在模块级只跑一份，结果写进独立的 useLive store，其他页面不订阅就不重渲染。
+const trafficRef = { up: 0, down: 0, t: Date.now(), initialized: false }
+const rateRef = { up: 0, down: 0 }
+let trafficBusy = false
+let trafficTimer: number | null = null
+
+function resetTraffic() {
+  trafficRef.up = 0
+  trafficRef.down = 0
+  trafficRef.t = Date.now()
+  trafficRef.initialized = false
+  rateRef.up = 0
+  rateRef.down = 0
+  useLive.getState().resetLive()
+}
+
+async function pollTraffic() {
+  if (trafficBusy) return
+  const s = useStore.getState()
+  if (!s.conn.connected) return
+  trafficBusy = true
+  const now = Date.now()
+  try {
+    const adapter = engineAdapter
+    let up = trafficRef.up
+    let down = trafficRef.down
+    let directUpRate: number | undefined
+    let directDownRate: number | undefined
+    if (adapter?.traffic) {
+      const r = await adapter.traffic()
+      up = r.up
+      down = r.down
+      if (typeof r.upRate === 'number' && typeof r.downRate === 'number') {
+        directUpRate = r.upRate
+        directDownRate = r.downRate
+      }
+    } else {
+      // 纯前端演示环境保留轻量模拟，仅用于界面预览
+      up += Math.floor(Math.random() * 9000)
+      down += Math.floor(Math.random() * 60000)
+    }
+    const prev = trafficRef
+    let smoothUp = rateRef.up
+    let smoothDown = rateRef.down
+    if (directUpRate !== undefined && directDownRate !== undefined) {
+      // mihomo /traffic 直接给出每秒速率，这里只做轻微平滑
+      smoothUp = smoothUp * 0.35 + directUpRate * 0.65
+      smoothDown = smoothDown * 0.35 + directDownRate * 0.65
+    } else if (!prev.initialized) {
+      trafficRef.up = up
+      trafficRef.down = down
+      trafficRef.t = now
+      trafficRef.initialized = true
+      rateRef.up = 0
+      rateRef.down = 0
+      useLive.getState().setTraffic({ up, down, upRate: 0, downRate: 0 })
+      return
+    } else {
+      const elapsed = Math.min(5, Math.max(0.5, (now - prev.t) / 1000))
+      const instantUp = Math.max(0, up - prev.up) / elapsed
+      const instantDown = Math.max(0, down - prev.down) / elapsed
+      smoothUp = smoothUp * 0.5 + instantUp * 0.5
+      smoothDown = smoothDown * 0.5 + instantDown * 0.5
+    }
+    rateRef.up = smoothUp
+    rateRef.down = smoothDown
+    trafficRef.up = up
+    trafficRef.down = down
+    trafficRef.t = now
+    trafficRef.initialized = true
+    useLive.getState().setTraffic({
+      up, down,
+      upRate: Math.round(smoothUp),
+      downRate: Math.round(smoothDown),
+    })
+  } catch {
+    /* 单次读取失败保持上一次数值，下一轮再试 */
+  } finally {
+    trafficBusy = false
+    useLive.getState().bumpTick()
+  }
+}
+
+function startTrafficLoop() {
+  if (typeof window === 'undefined' || trafficTimer !== null) return
+  trafficTimer = window.setInterval(() => { void pollTraffic() }, 1000)
+}
+
 /** 连接引擎控制器：把适配器与全局状态桥接，页面只需调用这里的动作。 */
 export function useEngine() {
-  const store = useStore()
-  const trafficRef = useRef({ up: 0, down: 0, t: Date.now(), initialized: false })
-  const rateRef = useRef({ up: 0, down: 0 })
-  const trafficBusyRef = useRef(false)
-  const [tick, setTick] = useState(0)
-
-  const resetTraffic = useCallback(() => {
-    trafficRef.current = { up: 0, down: 0, t: Date.now(), initialized: false }
-    rateRef.current = { up: 0, down: 0 }
-  }, [])
-
   // 平台检测 & 适配器创建
   useEffect(() => {
     let cancelled = false
@@ -166,8 +250,10 @@ export function useEngine() {
         timer = window.setTimeout(boot, 250)
         return
       }
-      store.setPlatform(platform)
+      const s = useStore.getState()
+      s.setPlatform(platform)
       ensureAdapter()
+      startTrafficLoop()
       // 托盘状态同步
       ;(window as any)._antunSyncTray = () => desk?.notifyStatus?.(useStore.getState().conn.connected)
     }
@@ -179,73 +265,6 @@ export function useEngine() {
     }
     // 仅在挂载时检测一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // 会话时钟 / 实时速率：桌面端读核心累计流量并计算每秒增量
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      const s = useStore.getState()
-      if (!s.conn.connected) return
-      if (trafficBusyRef.current) {
-        setTick((x) => x + 1)
-        return
-      }
-      trafficBusyRef.current = true
-      const now = Date.now()
-      try {
-        const adapter = engineAdapter
-        let up = trafficRef.current.up
-        let down = trafficRef.current.down
-        let directUpRate: number | undefined
-        let directDownRate: number | undefined
-        if (adapter?.traffic) {
-          const r = await adapter.traffic()
-          up = r.up
-          down = r.down
-          if (typeof r.upRate === 'number' && typeof r.downRate === 'number') {
-            directUpRate = r.upRate
-            directDownRate = r.downRate
-          }
-        } else {
-          // 纯前端演示环境保留轻量模拟，仅用于界面预览
-          up += Math.floor(Math.random() * 9000)
-          down += Math.floor(Math.random() * 60000)
-        }
-        const prev = trafficRef.current
-        let smoothUp = rateRef.current.up
-        let smoothDown = rateRef.current.down
-        if (directUpRate !== undefined && directDownRate !== undefined) {
-          // mihomo /traffic 直接给出每秒速率，这里只做轻微平滑
-          smoothUp = smoothUp * 0.35 + directUpRate * 0.65
-          smoothDown = smoothDown * 0.35 + directDownRate * 0.65
-        } else if (!prev.initialized) {
-          trafficRef.current = { up, down, t: now, initialized: true }
-          rateRef.current = { up: 0, down: 0 }
-          s.setConn({ up, down, upRate: 0, downRate: 0 })
-          setTick((x) => x + 1)
-          return
-        } else {
-          const elapsed = Math.min(5, Math.max(0.5, (now - prev.t) / 1000))
-          const instantUp = Math.max(0, up - prev.up) / elapsed
-          const instantDown = Math.max(0, down - prev.down) / elapsed
-          smoothUp = smoothUp * 0.5 + instantUp * 0.5
-          smoothDown = smoothDown * 0.5 + instantDown * 0.5
-        }
-        rateRef.current = { up: smoothUp, down: smoothDown }
-        trafficRef.current = { up, down, t: now, initialized: true }
-        s.setConn({
-          up, down,
-          upRate: Math.round(smoothUp),
-          downRate: Math.round(smoothDown),
-        })
-        setTick((x) => x + 1)
-      } catch {
-        setTick((x) => x + 1)
-      } finally {
-        trafficBusyRef.current = false
-      }
-    }, 1000)
-    return () => clearInterval(timer)
   }, [])
 
   const scan = useCallback(async () => {
@@ -279,7 +298,7 @@ export function useEngine() {
   const connect = useCallback(async (optsOverride?: Partial<ConnectOptions>) => {
     resetTraffic()
     await engineConnect(optsOverride)
-  }, [resetTraffic])
+  }, [])
 
   // 启动即连接：等适配器与平台状态就绪后再触发，避免首帧竞态
   useEffect(() => {
@@ -292,7 +311,7 @@ export function useEngine() {
   const disconnect = useCallback(async () => {
     await engineDisconnect()
     resetTraffic()
-  }, [resetTraffic])
+  }, [])
 
   // 桌面壳退出：断开连接、还原代理后再通知主进程退出
   useEffect(() => {
@@ -300,10 +319,11 @@ export function useEngine() {
     if (!desk?.isDesktop) return
     const handler = async () => {
       if (useStore.getState().conn.connected) await disconnect()
+      flushPersist()
       desk.quit?.()
     }
     desk.onQuitRequest?.(handler)
   }, [disconnect])
 
-  return { scan, connect, disconnect, tick }
+  return { scan, connect, disconnect }
 }
