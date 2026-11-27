@@ -40,6 +40,8 @@ export interface CoreResult {
   colo: string
   latency: number
   error: string
+  /** 致命错误（核心进程已退出），前端应立即断开而不是继续重试 */
+  fatal?: boolean
 }
 
 export interface CoreComponentStatus {
@@ -136,7 +138,7 @@ declare global {
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
       saveCredential: (cred: WarpCredential) => Promise<void>
       loadCredential: () => Promise<WarpCredential>
-      probeStatus: (port: number) => Promise<CoreResult>
+      probeStatus: (port: number, lite?: boolean) => Promise<CoreResult>
       coreUpdateStatus: () => Promise<CoreUpdateStatus>
       coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
       psiphonRegions: () => Promise<RegionOption[]>
@@ -193,7 +195,7 @@ export function initDesktopBridge() {
     coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),
     loadCredential: () => invoke<WarpCredential>('load_credential'),
-    probeStatus: (port) => invoke<CoreResult>('probe_status', { port }),
+    probeStatus: (port, lite) => invoke<CoreResult>('probe_status', { port, lite: !!lite }),
     coreUpdateStatus: () => invoke<CoreUpdateStatus>('core_update_status'),
     coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
     psiphonRegions: () => invoke<RegionOption[]>('psiphon_regions'),

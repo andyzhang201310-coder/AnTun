@@ -96,6 +96,8 @@ export class DesktopAdapter implements EngineAdapter {
   private port: number
   private apiPort: number
   private connected = false
+  private fails = 0
+  private probing = false
 
   constructor(port: number, apiPort: number) {
     this.port = port
@@ -186,20 +188,33 @@ export class DesktopAdapter implements EngineAdapter {
     }
   }
 
-  /** 定时真实探测：每 5 秒通过代理请求一次出口，断连则回调上层 */
+  /** 定时健康检查：每 6 秒一次轻量 204 探测，连续 3 次失败才判定隧道失效 */
   probe(onPoint: (p: LatencyPoint) => void): void {
     this.stopProbe()
     this.probeTimer = setInterval(async () => {
-      if (!this.connected) return
+      if (!this.connected || this.probing) return
+      this.probing = true
       try {
-        const r = await this.desk.probeStatus(this.port) as CoreResult
-        if (r.ok) onPoint({ t: Date.now(), ms: r.latency })
-        else {
-          // 隧道失效：通知上层断开
+        const r = await this.desk.probeStatus(this.port, true) as CoreResult
+        if (r.ok) {
+          this.fails = 0
+          onPoint({ t: Date.now(), ms: r.latency })
+        } else if (r.fatal) {
+          // 核心进程已退出：没有重试价值，立即通知上层
+          this.fails = 0
           window.dispatchEvent(new CustomEvent('antun-tunnel-lost', { detail: r.error }))
+        } else {
+          // 单次抖动（限速 / 丢包 / 系统休眠唤醒）不当作断线，
+          // 连续 3 次（约 18 秒）都出不去才判定隧道失效。
+          this.fails += 1
+          if (this.fails >= 3) {
+            this.fails = 0
+            window.dispatchEvent(new CustomEvent('antun-tunnel-lost', { detail: r.error }))
+          }
         }
       } catch { /* 探测异常时保留状态，下轮再试 */ }
-    }, 5000)
+      finally { this.probing = false }
+    }, 6000)
   }
 
   async traffic(): Promise<{ up: number; down: number; upRate: number; downRate: number }> {
@@ -214,6 +229,8 @@ export class DesktopAdapter implements EngineAdapter {
 
   stopProbe(): void {
     if (this.probeTimer) { clearInterval(this.probeTimer); this.probeTimer = null }
+    this.fails = 0
+    this.probing = false
   }
 }
 

@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "antun"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "base64 0.23.1",
  "serde",

@@ -2,13 +2,137 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { createAdapter } from './adapters'
 import { initDesktopBridge } from '../desktop'
-import type { EngineAdapter, ConnectOptions } from '../types'
+import type { EngineAdapter, ConnectOptions, ConnState } from '../types'
 import { tr } from '../i18n'
+
+// ============ 全局单例引擎 ============
+// 适配器与连接动作放在模块级：任何页面发起的连接、健康检查、断线重连
+// 都操作同一个适配器实例，避免多个 useEngine 实例各自持有一份状态而互相打架。
+let engineAdapter: EngineAdapter | null = null
+
+function ensureAdapter(): EngineAdapter {
+  const s = useStore.getState()
+  if (!engineAdapter) {
+    // 桌面壳里平台一定是 windows；浏览器预览保持原判断
+    const platform = s.platform === 'web' ? 'windows' : s.platform
+    engineAdapter = createAdapter(platform, s.settings.apiPort, s.settings.mixedPort)
+    s.log('INFO', `${tr('diagPlatform', s.settings.lang)}: ${platform} · ${engineAdapter.name}`)
+  }
+  return engineAdapter
+}
+
+// ============ 隧道失效处理（全局单例） ============
+// 之前每个 useEngine 实例各绑一份监听，页面切换后监听被回收，
+// 而适配器里的健康检查定时器还在跑，失效事件无人处理。
+// 现在只在模块级绑定一次，多个实例共享，且离开首页后仍能自动重连。
+const repairLog: number[] = []
+
+const CLEARED_CONN: Partial<ConnState> = {
+  connected: false, connecting: false, startedAt: null,
+  exitIp: '', country: '', colo: '', city: '', latency: 0,
+  up: 0, down: 0, upRate: 0, downRate: 0, session: '',
+}
+
+async function engineDisconnect(): Promise<void> {
+  const s = useStore.getState()
+  s.log('INFO', 'disconnect -> restore proxy snapshot')
+  const adapter = engineAdapter
+  if (adapter) {
+    try { await adapter.disconnect() } catch { /* 核心可能已退出 */ }
+  }
+  useStore.getState().setConn(CLEARED_CONN)
+  ;(window as any)._antunSyncTray?.()
+  s.log('INFO', 'disconnected')
+  s.addHistory('disconnected')
+}
+
+async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<boolean> {
+  const s = useStore.getState()
+  if (s.conn.connecting || s.conn.connected) return false
+  s.setConn({ connecting: true, session: '' })
+  s.log('INFO', `connect -> protocol=${s.settings.proto}`)
+  s.addHistory(`connect ${s.settings.proto}`)
+  try {
+    const adapter = ensureAdapter()
+    const pinned = s.endpoints.find((e) => e.id === s.pinnedId) || null
+    const frontNode = s.settings.connMode === 'subscription'
+      ? s.subNodes.find((n) => n.id === s.settings.frontNodeId)
+      : undefined
+    if (s.settings.connMode === 'subscription' && !frontNode) {
+      throw new Error('订阅模式尚未选择前置节点：请到「模式」页导入订阅并选一个节点')
+    }
+    const opts: ConnectOptions = {
+      protocol: s.settings.proto,
+      endpoint: pinned,
+      frontConfig: frontNode?.config,
+      captureMode: s.settings.captureMode,
+      psiphon: s.settings.psiphon,
+      warpInWarp: s.settings.warpInWarp,
+      settings: s.settings,
+      ...optsOverride,
+    }
+    s.addHistory('render config -> start core')
+    s.addHistory('probe endpoint -> verify exit')
+    const state = await adapter.connect(opts)
+    useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
+    ;(window as any)._antunSyncTray?.()
+    adapter.probe((p) => useStore.getState().pushLatency(p))
+    s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
+    s.addHistory(`connected ${state.session}`)
+    return true
+  } catch (e: any) {
+    useStore.getState().setConn({ connecting: false, connected: false })
+    s.log('ERROR', `connect failed: ${e.message}`)
+    s.addHistory(`connect failed: ${e.message}`, false)
+    return false
+  }
+}
+
+async function handleTunnelLost(detail: string) {
+  const s = useStore.getState()
+  s.log('WARN', `tunnel lost: ${detail}`)
+  s.addHistory('tunnel lost', false)
+  s.setConn(CLEARED_CONN)
+  ;(window as any)._antunSyncTray?.()
+
+  if (!s.settings.autoRepair) {
+    s.log('WARN', 'auto repair disabled, stay disconnected')
+    return
+  }
+  // 10 分钟内最多自动重连 3 次，避免节点本身不可用时无限重试
+  const now = Date.now()
+  const recent = repairLog.filter((t) => now - t < 10 * 60_000)
+  repairLog.length = 0
+  repairLog.push(...recent)
+  if (recent.length >= 3) {
+    s.log('ERROR', 'auto repair: 10 分钟内已重连 3 次，停止自动修复')
+    return
+  }
+  repairLog.push(now)
+  s.log('INFO', 'auto repair: 隧道失效，按当前节点自动重连')
+  s.addHistory('auto repair: reconnect')
+  // 先确保核心与系统代理被清理，再按当前设置重连
+  await engineDisconnect()
+  const ok = await engineConnect()
+  if (!ok) useStore.getState().log('ERROR', 'auto repair failed')
+}
+
+function bindTunnelWatcher() {
+  if (typeof window === 'undefined') return
+  if ((window as any).__antunTunnelWatcher) return
+  ;(window as any).__antunTunnelWatcher = true
+  window.addEventListener('antun-tunnel-lost', (e) => {
+    const detail = (e as CustomEvent).detail || '隧道探测失败'
+    void handleTunnelLost(String(detail))
+  })
+}
+
+// 模块加载即注册：即使从「设置」页启动（首页未挂载）也能自动重连
+bindTunnelWatcher()
 
 /** 连接引擎控制器：把适配器与全局状态桥接，页面只需调用这里的动作。 */
 export function useEngine() {
   const store = useStore()
-  const adapterRef = useRef<EngineAdapter | null>(null)
   const trafficRef = useRef({ up: 0, down: 0, t: Date.now(), initialized: false })
   const rateRef = useRef({ up: 0, down: 0 })
   const trafficBusyRef = useRef(false)
@@ -43,8 +167,7 @@ export function useEngine() {
         return
       }
       store.setPlatform(platform)
-      adapterRef.current = createAdapter(platform, store.settings.apiPort, store.settings.mixedPort)
-      store.log('INFO', `${tr('diagPlatform', store.settings.lang)}: ${platform} · ${adapterRef.current.name}`)
+      ensureAdapter()
       // 托盘状态同步
       ;(window as any)._antunSyncTray = () => desk?.notifyStatus?.(useStore.getState().conn.connected)
     }
@@ -70,7 +193,7 @@ export function useEngine() {
       trafficBusyRef.current = true
       const now = Date.now()
       try {
-        const adapter = adapterRef.current
+        const adapter = engineAdapter
         let up = trafficRef.current.up
         let down = trafficRef.current.down
         let directUpRate: number | undefined
@@ -131,7 +254,7 @@ export function useEngine() {
     s.log('INFO', tr('scanning', s.settings.lang))
     s.addHistory(tr('scanning', s.settings.lang))
     try {
-      const adapter = adapterRef.current || createAdapter(s.platform, s.settings.apiPort, s.settings.mixedPort)
+      const adapter = ensureAdapter()
       let endpoints = await adapter.scan({ protocol: s.settings.proto })
       // 排序偏好
       if (s.settings.endpointRank === 'loss') endpoints = [...endpoints].sort((a, b) => a.loss - b.loss || a.latency - b.latency)
@@ -154,44 +277,8 @@ export function useEngine() {
   }, [])
 
   const connect = useCallback(async (optsOverride?: Partial<ConnectOptions>) => {
-    const s = useStore.getState()
-    if (s.conn.connecting || s.conn.connected) return
-    s.setConn({ connecting: true, session: '' })
-    s.log('INFO', `connect -> protocol=${s.settings.proto}`)
-    s.addHistory(`connect ${s.settings.proto}`)
-    try {
-      const adapter = adapterRef.current || createAdapter(s.platform, s.settings.apiPort, s.settings.mixedPort)
-      const pinned = s.endpoints.find((e) => e.id === s.pinnedId) || null
-      const frontNode = s.settings.connMode === 'subscription'
-        ? s.subNodes.find((n) => n.id === s.settings.frontNodeId)
-        : undefined
-      if (s.settings.connMode === 'subscription' && !frontNode) {
-        throw new Error('订阅模式尚未选择前置节点：请到「模式」页导入订阅并选一个节点')
-      }
-      const opts: ConnectOptions = {
-        protocol: s.settings.proto,
-        endpoint: pinned,
-        frontConfig: frontNode?.config,
-        captureMode: s.settings.captureMode,
-        psiphon: s.settings.psiphon,
-        warpInWarp: s.settings.warpInWarp,
-        settings: s.settings,
-        ...optsOverride,
-      }
-      s.addHistory('render config -> start core')
-      s.addHistory('probe endpoint -> verify exit')
-      const state = await adapter.connect(opts)
-      resetTraffic()
-      useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
-      ;(window as any)._antunSyncTray?.()
-      adapter.probe((p) => useStore.getState().pushLatency(p))
-      s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
-      s.addHistory(`connected ${state.session}`)
-    } catch (e: any) {
-      useStore.getState().setConn({ connecting: false, connected: false })
-      s.log('ERROR', `connect failed: ${e.message}`)
-      s.addHistory(`connect failed: ${e.message}`, false)
-    }
+    resetTraffic()
+    await engineConnect(optsOverride)
   }, [resetTraffic])
 
   // 启动即连接：等适配器与平台状态就绪后再触发，避免首帧竞态
@@ -203,36 +290,8 @@ export function useEngine() {
   }, [connect])
 
   const disconnect = useCallback(async () => {
-    const s = useStore.getState()
-    s.log('INFO', 'disconnect -> restore proxy snapshot')
-    const adapter = adapterRef.current
-    if (adapter) await adapter.disconnect()
+    await engineDisconnect()
     resetTraffic()
-    useStore.getState().setConn({
-      connected: false, connecting: false, startedAt: null,
-      exitIp: '', country: '', colo: '', city: '', latency: 0,
-      up: 0, down: 0, upRate: 0, downRate: 0, session: '',
-    })
-    ;(window as any)._antunSyncTray?.()
-    s.log('INFO', 'disconnected')
-    s.addHistory('disconnected')
-  }, [resetTraffic])
-
-  // 真实探测发现隧道失效时，自动清空连接状态（绝不保留假的"已连接"）
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail || '隧道探测失败'
-      resetTraffic()
-      useStore.getState().setConn({
-        connected: false, connecting: false, startedAt: null,
-        exitIp: '', country: '', colo: '', city: '', latency: 0,
-        up: 0, down: 0, upRate: 0, downRate: 0, session: '',
-      })
-      useStore.getState().log('ERROR', `tunnel lost: ${detail}`)
-      useStore.getState().addHistory('tunnel lost', false)
-    }
-    window.addEventListener('antun-tunnel-lost', handler)
-    return () => window.removeEventListener('antun-tunnel-lost', handler)
   }, [resetTraffic])
 
   // 桌面壳退出：断开连接、还原代理后再通知主进程退出

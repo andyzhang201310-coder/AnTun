@@ -29,6 +29,9 @@ const GH_ORIGIN: &str = "https://github.com/MetaCubeX/mihomo/releases/download/"
 #[derive(Default)]
 pub struct CoreState {
     child: Mutex<Option<Child>>,
+    /// Windows Job 对象句柄：句柄随进程退出自动关闭，内核子进程被系统一起结束，
+    /// 避免主程序被强杀后残留 mihomo 占着 7890/9090，导致下次连接起不来。
+    job: Mutex<Option<isize>>,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -72,6 +75,9 @@ pub struct CoreResult {
     pub colo: String,
     pub latency: u32,
     pub error: String,
+    /// 致命错误（核心进程已退出等），前端据此立即断开而不是继续重试
+    #[serde(default)]
+    pub fatal: bool,
 }
 
 impl CoreResult {
@@ -84,7 +90,14 @@ impl CoreResult {
             colo: String::new(),
             latency: 0,
             error: msg.into(),
+            fatal: false,
         }
+    }
+
+    fn fail_fatal(msg: impl Into<String>) -> Self {
+        let mut r = Self::fail(msg);
+        r.fatal = true;
+        r
     }
 }
 
@@ -263,6 +276,68 @@ fn stop_child(state: &tauri::State<'_, CoreState>) {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+    close_job(state);
+}
+
+/// 把核心进程放进「随主进程一起结束」的 Job 对象。
+///
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`：最后一个句柄关闭时（含主程序被强杀、
+/// 崩溃、任务管理器结束进程）系统会一并结束子进程，不留孤儿核心。
+/// 失败时静默降级为普通子进程，不影响连接。
+#[cfg(windows)]
+fn bind_child_to_job(child: &Child) -> Option<isize> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let set = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if set == 0 {
+            let _ = CloseHandle(job);
+            return None;
+        }
+        let handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        if AssignProcessToJobObject(job, handle) == 0 {
+            let _ = CloseHandle(job);
+            return None;
+        }
+        Some(job as isize)
+    }
+}
+
+#[cfg(not(windows))]
+fn bind_child_to_job(_child: &Child) -> Option<isize> {
+    None
+}
+
+fn close_job(state: &tauri::State<'_, CoreState>) {
+    if let Ok(mut guard) = state.job.lock() {
+        if let Some(handle) = guard.take() {
+            #[cfg(windows)]
+            unsafe {
+                let _ = windows_sys::Win32::Foundation::CloseHandle(
+                    handle as windows_sys::Win32::Foundation::HANDLE,
+                );
+            }
+            #[cfg(not(windows))]
+            let _ = handle;
         }
     }
 }
@@ -801,6 +876,11 @@ pub async fn core_connect(
         Ok(c) => c,
         Err(e) => return Ok(CoreResult::fail(format!("启动核心: {}", e))),
     };
+    // 核心进程加入 Job：主程序异常退出时由系统一并结束，避免残留占用端口
+    let job = bind_child_to_job(&child);
+    if let Ok(mut guard) = state.job.lock() {
+        *guard = job;
+    }
     if let Ok(mut guard) = state.child.lock() {
         *guard = Some(child);
     }
@@ -912,15 +992,40 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
         colo: if warp == "on" || warp == "plus" { format!("WARP {}", warp) } else { "WARP".into() },
         latency,
         error: String::new(),
+        fatal: false,
     })
 }
 
+/// 轻量存活探测：只发一次 generate_204，用最短时间判断隧道是否还能出网。
+///
+/// 定时健康检查用它而不是完整 `probe_exit`（trace + 204 两次请求），
+/// 避免 Cloudflare trace 被限速或网络抖动时把可用隧道误判为断开。
+fn probe_alive(proxy_url: &str) -> Result<u32, String> {
+    let t0 = SystemTime::now();
+    let out = hidden_command("curl.exe")
+        .args([
+            "-s", "-o", "NUL", "-w", "%{http_code}", "--max-time", "6",
+            "-x", proxy_url, "http://www.gstatic.com/generate_204",
+        ])
+        .output()
+        .map_err(|e| format!("连通性检查: {}", e))?;
+    let code = String::from_utf8_lossy(&out.stdout);
+    if !code.trim().starts_with('2') {
+        return Err(format!("外网连通性检查失败（HTTP {}）", code.trim()));
+    }
+    Ok(SystemTime::now().duration_since(t0).unwrap_or_default().as_millis() as u32)
+}
+
 /// 独立探测命令（供前端定时调用，验证隧道是否仍可用）
+///
+/// `lite = true` 时只做一次轻量 204 探测，用于 6 秒一次的定时健康检查；
+/// 完整探测（trace 取出口 IP + 204 复核）只在连接、手动刷新时使用。
 #[tauri::command]
 pub async fn probe_status(
     app: AppHandle,
     state: tauri::State<'_, CoreState>,
     port: u16,
+    lite: Option<bool>,
 ) -> Result<CoreResult, String> {
     // 核心意外退出时立即还原系统代理，否则浏览器会一直指向死端口
     let mut child_gone = false;
@@ -936,13 +1041,45 @@ pub async fn probe_status(
     }
     if child_gone {
         let _ = restore_system_proxy(&app);
-        return Ok(CoreResult::fail("核心进程已退出，系统代理已还原"));
+        return Ok(CoreResult::fail_fatal("核心进程已退出，系统代理已还原"));
     }
 
     let proxy_url = format!("http://127.0.0.1:{}", port);
+    if lite.unwrap_or(false) {
+        return match probe_alive(&proxy_url) {
+            Ok(ms) => Ok(CoreResult {
+                ok: true,
+                exit_ip: String::new(),
+                country: String::new(),
+                city: String::new(),
+                colo: String::new(),
+                latency: ms,
+                error: String::new(),
+                fatal: false,
+            }),
+            Err(e) => Ok(CoreResult::fail(e)),
+        };
+    }
+
     match probe_exit(&proxy_url) {
         Ok(r) => Ok(r),
-        Err(e) => Ok(CoreResult::fail(e)),
+        Err(e) => {
+            // trace 可能被限速或偶发超时：再用一次轻量 204 复核，
+            // 只要还能出网就当作存活，避免单次抖动被误判为断线。
+            match probe_alive(&proxy_url) {
+                Ok(ms) => Ok(CoreResult {
+                    ok: true,
+                    exit_ip: String::new(),
+                    country: String::new(),
+                    city: String::new(),
+                    colo: String::new(),
+                    latency: ms,
+                    error: String::new(),
+                    fatal: false,
+                }),
+                Err(_) => Ok(CoreResult::fail(e)),
+            }
+        }
     }
 }
 

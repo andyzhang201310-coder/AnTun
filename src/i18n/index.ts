@@ -264,7 +264,6 @@ const zh: Record<string, string> = {
   aboutResourceDir: '资源目录',
   aboutDataDir: '数据目录',
   licenseDetail: 'AnTun 代码 MIT · 内置核心 mihomo / Psiphon 为 GPL-3.0',
-  reference: '参考项目 XEHN',
 
   // 日志页
   logsTitle: '日志',
@@ -550,7 +549,6 @@ const en: Record<string, string> = {
   aboutResourceDir: 'Resources',
   aboutDataDir: 'Data directory',
   licenseDetail: 'AnTun code: MIT · bundled mihomo / Psiphon: GPL-3.0',
-  reference: 'Reference project XEHN',
 
   logsTitle: 'Logs',
   logsSub: 'Runtime log, connection history and diagnostics',
