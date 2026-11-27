@@ -13,7 +13,6 @@ const DEFAULT_SETTINGS: Settings = {
   subscriptionUrl: '',
   frontNodeId: '',
   proto: 'awg',
-  outerProto: 'wg',
   innerProto: 'wg',
   rescan: false,
   psiphon: false,
@@ -32,6 +31,9 @@ const DEFAULT_SETTINGS: Settings = {
   dnsLeak: true,
   subExit: 'node',
   subViaWarp: false,
+  subSort: 'default',
+  nodeProtoFilter: 'all',
+  logsTab: 'runtime',
   proxyMode: 'custom',
   domainDirect: '',
   domainProxy: '',
@@ -106,6 +108,11 @@ interface AppStore {
   conn: ConnState
   endpoints: Endpoint[]
   scanning: boolean
+  /**
+   * 节点页搜索词。只在本进程内保留：切页不丢（页面是条件渲染的），
+   * 但不落盘 —— 否则下次开机打开节点页，列表是被过滤过的，容易以为端点没了。
+   */
+  nodeQuery: string
   rules: Rule[]
   logs: LogEntry[]
   history: HistoryStep[]
@@ -119,6 +126,7 @@ interface AppStore {
   setConn: (c: Partial<ConnState>) => void
   setEndpoints: (e: Endpoint[]) => void
   setScanning: (b: boolean) => void
+  setNodeQuery: (q: string) => void
   pinEndpoint: (id: string | null) => void
   toggleCountry: (c: string) => void
   recordColo: (r: Omit<ColoRecord, 'ts' | 'hits'>) => void
@@ -194,6 +202,7 @@ export const useStore = create<AppStore>()(
       conn: DEFAULT_CONN,
       endpoints: [],
       scanning: false,
+      nodeQuery: '',
       rules: DEFAULT_RULES,
       logs: [],
       history: [],
@@ -207,6 +216,7 @@ export const useStore = create<AppStore>()(
       setConn: (partial) => set((s) => ({ conn: { ...s.conn, ...partial } })),
       setEndpoints: (endpoints) => set({ endpoints }),
       setScanning: (scanning) => set({ scanning }),
+      setNodeQuery: (nodeQuery) => set({ nodeQuery }),
       pinEndpoint: (pinnedId) => set({ pinnedId }),
       toggleCountry: (c) => set((s) => ({
         allowedCountries: s.allowedCountries.includes(c)

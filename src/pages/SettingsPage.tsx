@@ -22,6 +22,13 @@ export function SettingsPage() {
   const [diag, setDiag] = useState<DiagReport | null>(null)
   const [diagBusy, setDiagBusy] = useState<'dns' | 'ai' | null>(null)
   const isDesk = !!(window as any).AnTunDesktop?.isDesktop
+  /**
+   * WARP 协议是否参与建链。订阅模式「节点出口」且未开启「经 WARP 承载」时，
+   * 隧道完全由订阅节点自己的协议（如 VLESS）承担，render_config 里那条 WARP
+   * 出站不会被任何组引用，协议项选了也不生效 —— 与首页协议下拉框同一判定。
+   */
+  const warpInPlay = !(s.connMode === 'subscription' && s.subExit === 'node' && !s.subViaWarp)
+  const subNode = store.subNodes.find((n) => n.id === s.frontNodeId)
 
   const loadCoreStatus = async () => {
     const desk = (window as any).AnTunDesktop
@@ -256,11 +263,14 @@ export function SettingsPage() {
               { value: 'colo', label: t('rankColo') },
             ]} />
         } />
-        <FieldRow title={t('protocol')} control={
-          <ProtocolPicker value={s.proto} onChange={(p) => store.setSetting('proto', p)} />
-        } />
-        <FieldRow title={t('outerProto')} control={
-          <ProtocolPicker value={s.outerProto} onChange={(p) => store.setSetting('outerProto', p)} />
+        <FieldRow title={t(warpInPlay ? 'protocol' : 'protocolLocked')} desc={warpInPlay ? undefined : t('protoNodeExitHint')} control={
+          <ProtocolPicker
+            value={s.proto}
+            onChange={(p) => store.setSetting('proto', p)}
+            disabled={!warpInPlay}
+            valueText={subNode ? subNode.nodeType.toUpperCase() : undefined}
+            lockLabel={t('subExitTag')}
+          />
         } />
         <FieldRow title={t('rescan')} desc={t('rescanDesc')} control={
           <Toggle checked={s.rescan} onChange={(v) => store.setSetting('rescan', v)} />

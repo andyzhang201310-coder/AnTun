@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { ScrollText, Copy, Trash2, FileText } from 'lucide-react'
 import { useStore } from '../store'
 import { tr } from '../i18n'
@@ -13,7 +12,9 @@ export function LogsPage() {
   const store = useStore()
   const { settings: s, logs, history, conn, platform } = store
   const t = (k: string) => tr(k, s.lang)
-  const [tab, setTab] = useState<'runtime' | 'history' | 'diag'>('runtime')
+  // 分栏存进设置：日志页同样是条件渲染，放组件内 state 一切页就被重置回「运行日志」
+  const tab = s.logsTab
+  const setTab = (v: 'runtime' | 'history' | 'diag') => store.setSetting('logsTab', v)
 
   const diagnostics = renderDiagnostics(s, platform, { connected: conn.connected, exitIp: conn.exitIp, protocol: conn.protocol })
   const copy = (text: string) => {

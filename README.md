@@ -28,12 +28,12 @@ AnTun 采用 **Web 技术栈一次开发、多端复用**：界面与逻辑只�
 
 覆盖完整的连接与代理管理能力，并针对跨平台做了增强：
 
-- **首页**：顶栏第一行是「主页 · 一键扫描最优端点并建立加密隧道」，第二行是开源免费声明。页面主体是唯一的连接圆环（点击连接/断开，会话时钟 / 动画进度）。左下侧栏是「已选节点」：出口节点下拉（WARP 自动择优 / 已实测端点 / 订阅节点）+ 扫描按钮，切换节点时自动断开重连。右侧是协议下拉框（盾牌图标 + 当前协议 + 可用状态，支持 WireGuard / AWG / GOOL / MASQUE H3 / MASQUE H2 / MASQUE in MASQUE）与连接选项；当订阅出口为「节点出口」且未开启 WARP 承载时，隧道完全由订阅节点自己的协议承担，该下拉框降级为只读并显示节点协议（如 VLESS），避免误以为 WARP 协议正在生效。下方依次是出口 IP / 国家 / 机房 / 延迟、出口机房（Cloudflare 就近分配，附本机实测的「端点 → 机房」记录，点一行即锁定该端点）、带当前毫秒数的实时延迟曲线、实时速率与上下行波形图（近 90 秒）、缓存端点锁定。端点下拉里的延迟是用本机凭证真实握手测出来的，不是估算值。窄窗口下连接区自动堆叠。
+- **首页**：顶栏第一行是「主页 · 一键扫描最优端点并建立加密隧道」，第二行是开源免费声明。页面主体是唯一的连接圆环（点击连接/断开，会话时钟 / 动画进度）。左下侧栏是「已选节点」：出口节点下拉（WARP 自动择优 / 已实测端点 / 订阅节点）+ 扫描按钮，切换节点时自动断开重连。右侧是协议下拉框（盾牌图标 + 当前协议 + 可用状态，支持 WireGuard / AWG / GOOL / MASQUE H3 / MASQUE H2 / MASQUE in MASQUE）与连接选项；当订阅出口为「节点出口」且未开启 WARP 承载时，隧道完全由订阅节点自己的协议承担，该下拉框降级为只读并显示节点协议（如 VLESS），避免误以为 WARP 协议正在生效。下方依次是出口 IP / 国家 / 机房 / 延迟（国家与机房前带国旗图标；台湾省、香港、澳门一律显示中国国旗与「中国台湾 / 中国香港 / 中国澳门」表述）、出口机房（Cloudflare 就近分配，附「端点 → 机房」实测记录，点一行即锁定该端点）、带当前毫秒数的实时延迟曲线、实时速率与上下行波形图（近 90 秒）、缓存端点锁定。端点下拉里的延迟是用本机凭证真实握手测出来的，不是估算值。窄窗口下连接区自动堆叠。
 - **顶栏**：主题与语言改为图标按钮，单击分别切换浅色/深色与中文/英文，保留悬停提示与 TV 焦点样式。
-- **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点。订阅节点列表提供**一键测速**：延迟走一次 `/group/PROBE/delay`，由临时核心内部并发探测全部节点（`unified-delay` 口径，只含连接建立时间，和 Clash / Mihomo Party 一致），下载速度按 3 路并发、固定时长取稳态值，可按延迟/速度排序。订阅出口可选 **WARP 出口**（节点前置，最终 IP 仍是共享 WARP）或 **节点出口**（节点直接出站，可选让 WARP 承载节点流量），后者用于访问 ChatGPT / Gemini 等对 WARP 共享 IP 风控严格的站点。
-- **节点**：端点真实探测（用本机凭证对每个候选端点发一次真实 WireGuard 握手，16 路并发、2 秒超时，活端点 ≈ 一个 RTT；一个都没通时回退到「一个核心 + 一个 `PROBE` 组 + 一次 `/group/delay`」再确认一次，避免把本地网络封锁误报成端点不可用）、搜索、协议过滤、按延迟/丢包/地址排序、点击锁定端点。握手失败的端点标记为不可用，不会被自动择优选中。
+- **模式**：WARP 直连 / 订阅模式；支持导入 http(s) 订阅、Clash YAML 或粘贴 `ss://` / `vmess://` / `trojan://` / `vless://` / `socks5://` / `http://` 节点。订阅节点列表提供**一键测速**：延迟走一次 `/group/PROBE/delay`，由临时核心内部并发探测全部节点（`unified-delay` 口径，只含连接建立时间，和 Clash / Mihomo Party 一致），下载速度按 3 路并发、固定时长取稳态值，可按延迟/速度排序（排序记在设置里，切页不重置）。每个节点名前面带国旗图标。订阅出口可选 **WARP 出口**（节点前置，最终 IP 仍是共享 WARP）或 **节点出口**（节点直接出站，可选让 WARP 承载节点流量），后者用于访问 ChatGPT / Gemini 等对 WARP 共享 IP 风控严格的站点。
+- **节点**：端点真实探测（用本机凭证对每个候选端点发一次真实 WireGuard 握手，16 路并发、2 秒超时，活端点 ≈ 一个 RTT；一个都没通时回退到「一个核心 + 一个 `PROBE` 组 + 一次 `/group/delay`」再确认一次，避免把本地网络封锁误报成端点不可用）、搜索、协议过滤（这两项同样不会被切页重置）、按延迟/丢包/地址排序、点击锁定端点。握手失败的端点标记为不可用，不会被自动择优选中。
 - **规则**：代理模式（自定义 / 绕过大陆 / 全局）、规则增删启停、直连/代理域名清单。
-- **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为、DNS 与出口（DNS 预设 / 自定义 / 关闭 + **DNS 防泄漏**：fake-ip 与 IP 形式 DoH 经隧道解析；Psiphon 出口地区采用“自动选择 + ISO 国家码”列表，选择后写入 `EgressRegion`）、**网络诊断**（DNS 泄漏检测 + ChatGPT / Gemini / Claude 站点连通性检测），全部设置项持久化到本机。
+- **设置**：WARP 账户、内核更新（mihomo 官方 Release / Psiphon 组件包）、捕获与端口（本地混合端口 / API 端口 / 局域网共享 / 地址族 / MTU）、路由分流、启动与行为、DNS 与出口（DNS 预设 / 自定义 / 关闭 + **DNS 防泄漏**：fake-ip 与 IP 形式 DoH 经隧道解析；Psiphon 出口地区采用“自动选择 + ISO 国家码”列表，选择后写入 `EgressRegion`）、**网络诊断**（DNS 泄漏检测 + ChatGPT / Gemini / Claude 站点连通性检测），全部设置项持久化到本机。订阅模式「节点出口」且未开启 WARP 承载时，设置页的「协议」也会降级为只读（显示订阅节点自己的协议）；原来的「外层协议」从未传入后端、`render_config` 也不读，已在 1.7.1 移除。
 - **关于**：仅保留品牌、简介与项目主页。
 - **日志**：运行日志、连接历史、可复制的诊断信息。
 - 浅色 / 深色 / 跟随系统主题，中文 / English 双语，手机 / 桌面 / TV 三档响应式布局，TV 遥控器焦点态。
@@ -60,6 +60,8 @@ src-tauri/           Tauri 桌面壳
 
 **加一个功能 = 加一个页面组件 + 一个 i18n key + 在 App.tsx 挂路由**。状态放 store，真实隧道逻辑放 engine 适配器。
 
+`public/flags/*.svg` 是国家/地区国旗图标，取自 [flag-icons](https://github.com/lipis/flag-icons)（MIT，许可原文见 `public/flags/LICENSE.txt`）。**不能用国旗 emoji**：Windows 的 Segoe UI Emoji 不含区域指示符，`🇯🇵` 会原样渲染成 `JP` 两个字母（已用无头 Chrome 截图确认），所以图标必须是图片资源。
+
 ## 多端说明
 
 同一份 `dist/` 可直接用于：
@@ -72,7 +74,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.7.0_x64-setup.exe` —— 默认内置核心，安装包约 **22.8 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.7.1_x64-setup.exe` —— 默认内置核心，安装包约 **22.8 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -124,7 +126,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.7.0**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.7.1**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml

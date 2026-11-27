@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { Search, RefreshCw, Star, Lock, Unlock, Zap } from 'lucide-react'
-import { useState } from 'react'
 import { useStore } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
@@ -12,8 +11,11 @@ export function NodesPage() {
   const { settings, endpoints, scanning, pinnedId } = store
   const { scan } = useEngine()
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
-  const [query, setQuery] = useState('')
-  const [protoFilter, setProtoFilter] = useState<Protocol | 'all'>('all')
+  // 搜索词与协议过滤都不能放组件内 state：页面是条件渲染的（App.tsx），切走即卸载、回来就重置
+  const query = store.nodeQuery
+  const protoFilter = settings.nodeProtoFilter
+  const setQuery = store.setNodeQuery
+  const setProtoFilter = (p: Protocol | 'all') => store.setSetting('nodeProtoFilter', p)
 
   useEffect(() => { if (!endpoints.length && !scanning) scan() }, [])
 

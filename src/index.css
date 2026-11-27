@@ -191,6 +191,13 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-3); font-size: 11px; font-weight: 700; white-space: nowrap;
 }
 .proto-hint { font-size: 11px; line-height: 1.55; color: var(--text-3); margin-top: 7px; }
+/* 设置页里降级为只读的协议项：与可点的分段控件同高，避免整行跳动 */
+.proto-readonly {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-2); font-size: 12.5px;
+}
 
 /* ============ 顶栏图标按钮 ============ */
 .icon-controls { display: flex; align-items: center; gap: 8px; }
@@ -237,15 +244,34 @@ a { color: inherit; text-decoration: none; }
 .home-node-pick-active .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-node-pick-active .btn { margin-left: auto; }
 
+/* ============ 国旗图标 ============ */
+/* Windows 无法渲染国旗 emoji（只会显示 JP/SG 字母），国旗统一走 public/flags 的 SVG */
+.flag {
+  display: inline-block; vertical-align: -1px; object-fit: cover;
+  border-radius: 2px; flex: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .12);
+  background: var(--surface-3);
+}
+.flag-none { color: var(--text-3); flex: none; vertical-align: -1px; }
+/* 图标 + 文本的组合行：让图标和首行文字基线对齐，不被行高顶偏 */
+.with-flag { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+/* 内层 span 必须给 min-width:0，否则 flex 子项的 auto 最小宽度会顶住、省略号不生效 */
+.with-flag > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
 /* ============ 出口机房记录 ============ */
 .colo-row {
-  display: grid; grid-template-columns: 1.5fr .7fr 1fr auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: 1.4fr .6fr 1.4fr auto; gap: 10px; align-items: center;
   padding: 9px 12px; border-radius: 10px; cursor: pointer; transition: background .2s;
 }
 .colo-row:hover { background: var(--surface-2); }
 .colo-row.selected { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--brand); }
 .colo-row.disabled { opacity: .5; cursor: not-allowed; }
 .colo-row .cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+/* 表头与下方记录同左内边距（记录行 padding 12px），否则标题会顶到卡片边缘、和第一列错位 */
+.colo-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; margin-bottom: 4px;
+}
 
 /* ============ 速率波形图例 ============ */
 .rate-legend { display: flex; gap: 14px; align-items: center; font-size: 11px; color: var(--text-3); }

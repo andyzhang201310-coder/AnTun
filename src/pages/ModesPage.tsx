@@ -3,6 +3,8 @@ import { Layers, Link2, RefreshCw, Trash2, Check, AlertCircle, ArrowRight, Zap, 
 import { useStore, newId } from '../store'
 import { tr } from '../i18n'
 import { Card, Segment, Toggle, FieldRow, formatRate } from '../components/ui'
+import { Flag } from '../components/Flag'
+import { codeFromNode, displayNodeName } from '../lib/region'
 import type { Subscription, SubNode, NodeStat } from '../types'
 
 export function ModesPage() {
@@ -15,7 +17,9 @@ export function ModesPage() {
   const [testing, setTesting] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [sortKey, setSortKey] = useState<'default' | 'delay' | 'speed'>('default')
+  // 排序存进设置：本页是条件渲染的，切页即卸载，组件内 state 会被重置成默认顺序
+  const sortKey = s.subSort
+  const setSortKey = (v: 'default' | 'delay' | 'speed') => store.setSetting('subSort', v)
   const abortRef = useRef(false)
 
   const desk = (window as any).AnTunDesktop
@@ -286,7 +290,10 @@ export function ModesPage() {
                 <div key={node.id} className={`node-row t ${selected ? 'selected' : ''}`}
                   onClick={() => { store.setSetting('frontNodeId', node.id); store.setSetting('connMode', 'subscription') }} tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter') { store.setSetting('frontNodeId', node.id); store.setSetting('connMode', 'subscription') } }}>
-                  <span className="cell mono strong" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
+                  <span className="cell mono strong with-flag" title={node.name}>
+                    <Flag code={codeFromNode(node.name, node.server)} lang={s.lang} size={14} />
+                    <span>{displayNodeName(node.name)}</span>
+                  </span>
                   <span className="cell hide-sm">{shortType(node.nodeType)}</span>
                   <span className="cell mono hide-sm" title={`${node.server}:${node.port}`}>{node.server}:{node.port}</span>
                   <span className={`cell node-stat ${delayClass(delay)}`} title={failed ? st?.error : undefined}>

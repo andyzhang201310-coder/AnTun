@@ -72,9 +72,31 @@ export const PROTOCOL_LABELS: Record<Protocol, string> = {
   'masque-mm': 'MASQUE in MASQUE',
 }
 
-export function ProtocolPicker({ value, onChange, label }: {
+/** 设置页协议选择器：分段按钮；订阅节点直接出口时降级为只读展示 */
+export function ProtocolPicker({ value, onChange, label, disabled = false, valueText, lockLabel, hint }: {
   value: Protocol; onChange: (p: Protocol) => void; label?: string
+  /** 只读：当前模式下这个协议不参与建链 */
+  disabled?: boolean
+  /** 只读时展示的文本（如订阅节点自己的 VLESS） */
+  valueText?: string
+  /** 只读时的小标记（如「节点出口」） */
+  lockLabel?: string
+  /** 只读时的说明文案 */
+  hint?: string
 }) {
+  if (disabled) {
+    return (
+      <div>
+        {label && <div className="muted" style={{ fontSize: 12, marginBottom: 8, fontWeight: 600 }}>{label}</div>}
+        <div className="proto-readonly">
+          <Lock size={13} />
+          <span className="strong">{valueText || PROTOCOL_LABELS[value]}</span>
+          {lockLabel && <span className="badge badge-gray">{lockLabel}</span>}
+        </div>
+        {hint && <div className="proto-hint">{hint}</div>}
+      </div>
+    )
+  }
   return (
     <div>
       {label && <div className="muted" style={{ fontSize: 12, marginBottom: 8, fontWeight: 600 }}>{label}</div>}

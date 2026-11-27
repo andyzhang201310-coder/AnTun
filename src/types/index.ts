@@ -79,7 +79,6 @@ export interface Settings {
   subscriptionUrl: string
   frontNodeId: string
   proto: Protocol
-  outerProto: Protocol
   innerProto: Protocol
   rescan: boolean
   psiphon: boolean
@@ -101,6 +100,12 @@ export interface Settings {
   subExit: 'warp' | 'node'
   /** 节点出口时是否让 WARP 承载节点流量（前置隧道） */
   subViaWarp: boolean
+  /** 订阅节点列表排序（切页后保留，避免每次回来都被重置成默认顺序） */
+  subSort: 'default' | 'delay' | 'speed'
+  /** 节点页的协议过滤（同上：页面是条件渲染的，组件内 state 会被重置） */
+  nodeProtoFilter: Protocol | 'all'
+  /** 日志页当前分栏 */
+  logsTab: 'runtime' | 'history' | 'diag'
   proxyMode: 'custom' | 'bypass-mainland' | 'global'
   domainDirect: string
   domainProxy: string

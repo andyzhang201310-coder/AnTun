@@ -5,6 +5,8 @@ import type { ColoRecord } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
 import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
+import { Flag } from '../components/Flag'
+import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
   const store = useStore()
@@ -191,7 +193,8 @@ export function HomePage() {
             {subNode && (
               <div className="home-node-pick-active">
                 <Star size={13} fill="var(--brand)" color="var(--brand)" />
-                <span className="mono">{subNode.name}</span>
+                <Flag code={codeFromNode(subNode.name, subNode.server)} lang={settings.lang} size={15} />
+                <span className="mono">{displayNodeName(subNode.name)}</span>
                 <span className="muted">{subNode.nodeType.toUpperCase()} · {subNode.server}:{subNode.port}{subStat && subStat.delay > 0 ? ` · ${subStat.delay}ms` : ''}</span>
                 <button className="btn btn-ghost btn-sm" disabled={switching} onClick={() => void pinWarp(null)}>{t('switchToWarp')}</button>
               </div>
@@ -241,8 +244,20 @@ export function HomePage() {
 
       {/* 出口信息 */}
       <div className="grid-3">
-        <Stat label={t('exitIp')} value={conn.exitIp || '—'} sub={t('sessionClock') + ': ' + (conn.session || '—')} color="var(--brand)" />
-        <Stat label={t('country') + ' / ' + t('colo')} value={conn.country ? `${conn.country} · ${conn.colo}` : '—'} sub={conn.city} />
+        <Stat label={t('exitIp')} value={
+          <span className="with-flag">
+            <Flag code={conn.country} lang={settings.lang} globe={false} />
+            <span>{conn.exitIp || '—'}</span>
+          </span>
+        } sub={t('sessionClock') + ': ' + (conn.session || '—')} color="var(--brand)" />
+        <Stat label={t('country') + ' / ' + t('colo')} value={
+          conn.country ? (
+            <span className="with-flag">
+              <Flag code={conn.country} lang={settings.lang} globe={false} />
+              <span>{`${regionName(conn.country, settings.lang)} · ${conn.colo}`}</span>
+            </span>
+          ) : '—'
+        } sub={conn.city} />
         <Stat label={t('latency')} value={conn.latency ? `${conn.latency} ms` : '—'} sub={conn.endpoint ? `${conn.endpoint.host}:${conn.endpoint.port}` : t('endpoint')}
           color={conn.latency < 250 ? 'var(--success)' : conn.latency < 600 ? 'var(--warn)' : 'var(--danger)'} />
       </div>
@@ -251,8 +266,9 @@ export function HomePage() {
       <div className="grid-2">
         <Card title={<><Globe2 size={16} />{t('exitColo')}</>} sub={t('exitColoDesc')}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <div className="strong mono" style={{ fontSize: 19 }}>
-              {conn.country ? `${conn.country} · ${conn.colo}` : '—'}
+            <div className="strong mono with-flag" style={{ fontSize: 19 }}>
+              <Flag code={conn.country} lang={settings.lang} size={19} globe={false} />
+              <span>{conn.country ? `${regionName(conn.country, settings.lang)} · ${conn.colo}` : '—'}</span>
             </div>
             <span className={`badge ${conn.connected ? 'badge-blue' : 'badge-gray'}`}>
               {t(conn.connected ? 'coloLive' : 'coloIdle')}
@@ -263,7 +279,7 @@ export function HomePage() {
 
           {coloRecords.length ? (
             <div style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+              <div className="colo-head">
                 <span className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase' }}>{t('coloLogTitle')}</span>
                 <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={store.clearColoLog}>{t('clear')}</button>
               </div>
@@ -283,7 +299,10 @@ export function HomePage() {
                   >
                     <span className="cell mono strong">{r.host}:{r.port}</span>
                     <span className="cell" style={{ color: 'var(--brand)', fontWeight: 700 }}>{r.colo || '—'}</span>
-                    <span className="cell muted">{r.country || '—'} · {ago(r.ts)}</span>
+                    <span className="cell muted with-flag">
+                      <Flag code={r.country} lang={settings.lang} size={14} globe={false} />
+                      <span>{r.country ? `${regionName(r.country, settings.lang)} · ${ago(r.ts)}` : `— · ${ago(r.ts)}`}</span>
+                    </span>
                     <span className="cell" style={{ textAlign: 'right' }}>
                       {active ? <Check size={14} color="var(--brand)" /> : usable ? <Star size={14} className="muted" /> : <span className="muted" style={{ fontSize: 10.5 }}>{t('na')}</span>}
                     </span>
