@@ -72,7 +72,7 @@ src-tauri/           Tauri 桌面壳
 
 ## Tauri 桌面应用（已打包并验证）
 
-`src-tauri/target/release/bundle/nsis/AnTun_1.6.4_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
+`src-tauri/target/release/bundle/nsis/AnTun_1.6.5_x64-setup.exe` —— 默认内置核心，安装包约 **22.6 MB**，主程序 `antun.exe` 3.3 MB。用的是系统自带的 WebView2 Runtime（Win10/11 普遍预装），不捆绑 Chromium。删除 `src-tauri/resources/` 可回到 **1.3 MB** 的按需下载版。
 
 原生能力全部保留并实测：单实例锁（二次双击唤起已有窗口）、系统托盘左键切换/右键菜单、关闭窗口收进托盘保持隧道、托盘退出前通知前端断连还原代理、开机自启查询与设置。前端通过 `src/desktop.ts` 注入统一的 `AnTunDesktop` 桌面接口，页面代码无需区分环境；Web 环境不注入任何对象，浏览器版行为不变。
 
@@ -88,7 +88,9 @@ src-tauri/           Tauri 桌面壳
 6. 探测失败或超时，核心进程会被停止，界面如实显示失败——不会伪造出口 IP；
 7. 每 5 秒真实复探一次，隧道失效自动断开；所有子进程（mihomo / curl / powershell）均隐藏控制台窗口，不再闪 cmd 黑框。
 
-**WARP 凭证**：内置一份经实测可用的免费凭证，开箱即可连接；也可在"设置 → WARP 账户"粘贴自己的账户 JSON 覆盖。凭证格式参考 `src/engine/credential.ts`（兼容 `private_key` / `public_key` / `endpoint` / `address` 等多种命名）。
+**WARP 凭证**：首次启动会通过 Cloudflare 匿名注册接口为本机生成一份**独享**设备密钥（X25519 密钥对本地生成，私钥不出本机），之后每次连接都用这把身份；注册失败（无网络、接口变动）自动回退内置共享凭证，不会阻断连接。连接时若当前凭证建不起隧道，会自动用内置凭证重试一次，并在日志里写明降级原因。也可在"设置 → WARP 账户"粘贴自己的账户 JSON 覆盖（标记为 `user`，不会被自动注册替换），设置页会显示当前身份是「本机独享」还是「内置共享」。凭证格式参考 `src/engine/credential.ts`（兼容 `private_key` / `public_key` / `endpoint` / `address` 等多种命名）。
+
+> 内置凭证是硬编码在安装包里的共享密钥，任何人都能从二进制或公开仓库中取出；它只代表一个免费 WARP 身份，不含个人账号信息，也无法解密历史流量。MASQUE 系列协议使用独立的 ECDSA 注册流程，目前仍沿用内置密钥。
 
 实测结果（本机 Windows + Tauri exe）：点击连接后建立真实隧道，出口 `104.28.243.42`、`warp=on`；系统代理写入 `127.0.0.1:7890`，使用系统代理的 **`youtube.com` 返回 HTTP 200**、gstatic `generate_204` 返回 204；断开后 `ProxyEnable` 自动恢复为 0。核心进程无可见控制台窗口。
 
@@ -120,7 +122,7 @@ npm run version:major          # 重大调整：1.1.0 -> 2.0.0
 npm run version:set -- 1.3.0   # 指定版本
 ```
 
-脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.6.4**。
+脚本会同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 README 安装包名；侧栏左下角的版本号由构建时从 `package.json` 注入，无需手动改。当前版本：**1.6.5**。
 
 > 构建依赖 Rust（已验证 1.95 / MSVC）与 WebView2 Runtime。国内网络需在 `~/.cargo/config.toml` 配置 rsproxy 镜像，否则 crates.io 拉取会被拦截：
 > ```toml

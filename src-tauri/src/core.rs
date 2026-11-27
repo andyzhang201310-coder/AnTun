@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
@@ -59,13 +59,15 @@ pub struct WarpCredential {
     pub masque_private_key: String,
     /// MASQUE 协议所需服务端公钥（base64 DER，已去掉 PEM 头尾）
     pub masque_public_key: String,
+    /// 凭证来源：user（用户导入）/ auto（本机自动注册）/ 空（内置共享）
+    pub source: String,
 }
 
 const MASQUE_SERVER: &str = "162.159.198.1";
 const MASQUE_SNI: &str = "consumer-masque.cloudflareclient.com";
 const MASQUE_PORT: u16 = 500;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreResult {
     pub ok: bool,
@@ -78,6 +80,15 @@ pub struct CoreResult {
     /// 致命错误（核心进程已退出等），前端据此立即断开而不是继续重试
     #[serde(default)]
     pub fatal: bool,
+    /// 本次连接实际使用的凭证来源：user / auto / builtin
+    #[serde(default)]
+    pub credential_source: String,
+    /// 是否发生了"凭证失败 → 回退内置凭证"的自动降级
+    #[serde(default)]
+    pub fallback: bool,
+    /// 降级前那次失败的原因（便于用户在日志里看到根因）
+    #[serde(default)]
+    pub fallback_reason: String,
 }
 
 impl CoreResult {
@@ -90,7 +101,7 @@ impl CoreResult {
             colo: String::new(),
             latency: 0,
             error: msg.into(),
-            fatal: false,
+            ..Default::default()
         }
     }
 
@@ -120,7 +131,7 @@ fn core_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_dir(app)?.join("mihomo.exe"))
 }
 
-fn cred_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn cred_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_dir(app)?.join("warp-credential.json"))
 }
 
@@ -271,7 +282,7 @@ pub fn restore_orphan_proxy(app: &AppHandle) {
 }
 
 /// 统一停止核心子进程。
-fn stop_child(state: &tauri::State<'_, CoreState>) {
+fn stop_child(state: &CoreState) {
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
@@ -327,7 +338,7 @@ fn bind_child_to_job(_child: &Child) -> Option<isize> {
     None
 }
 
-fn close_job(state: &tauri::State<'_, CoreState>) {
+fn close_job(state: &CoreState) {
     if let Ok(mut guard) = state.job.lock() {
         if let Some(handle) = guard.take() {
             #[cfg(windows)]
@@ -687,7 +698,7 @@ rules:
 /// 停止核心进程
 #[tauri::command]
 pub fn core_stop(app: AppHandle, state: tauri::State<'_, CoreState>) -> Result<(), String> {
-    stop_child(&state);
+    stop_child(state.inner());
     let _ = restore_system_proxy(&app);
     Ok(())
 }
@@ -789,6 +800,9 @@ pub async fn core_traffic(api_port: u16) -> Result<CoreTraffic, String> {
 /// 保存 WARP 凭证
 #[tauri::command]
 pub fn save_credential(app: AppHandle, cred: WarpCredential) -> Result<(), String> {
+    let mut cred = cred;
+    // 用户手动导入 = 自备身份，后续不会被自动注册覆盖
+    cred.source = "user".into();
     let path = cred_path(&app)?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(path, serde_json::to_string_pretty(&cred).map_err(|e| e.to_string())?)
@@ -797,15 +811,15 @@ pub fn save_credential(app: AppHandle, cred: WarpCredential) -> Result<(), Strin
 
 /// 内置默认凭证：来自公开 WARP 注册端点生成的免费账户，经本机实测可建立隧道。
 /// 作用：新用户安装后无需任何配置即可连接；用户导入自己的凭证后会覆盖它。
-const BUILTIN_OUTER_KEY: &str = "AO9FFXpvI2abd29iiuIskLoRg3nkT3j1VGs1M/1cj3s=";
-const BUILTIN_WARP_PEER: &str = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
-const BUILTIN_INNER_KEY: &str = "4FC385+GIJMWmOwT9e8NcD6WozjEyZePpV2uxhVE3k0=";
-const BUILTIN_INNER_HOST: &str = "8.34.70.19";
-const BUILTIN_MASQUE_KEY: &str = "MHcCAQEEIOiNkR2CFenP3pkGT6gKbMXdWSEA95DclNVCKs3wP089oAoGCCqGSM49AwEHoUQDQgAEqSoE25D8CGO4Wyb5NdDx0/t+2mPRZN0QALyEsMI4a17HXxzu4Lt4+bB0PsCNeQGAWAvGYpQ/G6Elqn7XCGiZow==";
-const BUILTIN_MASQUE_PEER: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIaU7MToJm9NKp8YfGxR6r+/h4mcG7SxI8tsW8OR1A5tv/zCzVbCRRh2t87/kxnP6lAy0lkr7qYwu+ox+k3dr6w==";
+pub(crate) const BUILTIN_OUTER_KEY: &str = "AO9FFXpvI2abd29iiuIskLoRg3nkT3j1VGs1M/1cj3s=";
+pub(crate) const BUILTIN_WARP_PEER: &str = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
+pub(crate) const BUILTIN_INNER_KEY: &str = "4FC385+GIJMWmOwT9e8NcD6WozjEyZePpV2uxhVE3k0=";
+pub(crate) const BUILTIN_INNER_HOST: &str = "8.34.70.19";
+pub(crate) const BUILTIN_MASQUE_KEY: &str = "MHcCAQEEIOiNkR2CFenP3pkGT6gKbMXdWSEA95DclNVCKs3wP089oAoGCCqGSM49AwEHoUQDQgAEqSoE25D8CGO4Wyb5NdDx0/t+2mPRZN0QALyEsMI4a17HXxzu4Lt4+bB0PsCNeQGAWAvGYpQ/G6Elqn7XCGiZow==";
+pub(crate) const BUILTIN_MASQUE_PEER: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIaU7MToJm9NKp8YfGxR6r+/h4mcG7SxI8tsW8OR1A5tv/zCzVbCRRh2t87/kxnP6lAy0lkr7qYwu+ox+k3dr6w==";
 
 /// 用内置凭证补齐缺失字段，保证嵌套协议开箱可用。
-fn fill_defaults(mut cred: WarpCredential) -> WarpCredential {
+pub(crate) fn fill_defaults(mut cred: WarpCredential) -> WarpCredential {
     if cred.private_key.is_empty() { cred.private_key = BUILTIN_OUTER_KEY.into(); }
     if cred.peer_public_key.is_empty() { cred.peer_public_key = BUILTIN_WARP_PEER.into(); }
     if cred.address_v4.is_empty() { cred.address_v4 = "172.16.0.2".into(); }
@@ -819,7 +833,7 @@ fn fill_defaults(mut cred: WarpCredential) -> WarpCredential {
     cred
 }
 
-fn builtin_credential() -> WarpCredential {
+pub(crate) fn builtin_credential() -> WarpCredential {
     fill_defaults(WarpCredential::default())
 }
 
@@ -837,7 +851,28 @@ pub fn load_credential(app: AppHandle) -> Result<WarpCredential, String> {
     Ok(builtin_credential())
 }
 
+/// 一次连接尝试的输入参数（首次尝试与回退重试用同一份）
+struct ConnectArgs {
+    protocol: String,
+    port: u16,
+    api_port: u16,
+    mtu: u16,
+    timeout_sec: u32,
+    allow_lan: bool,
+    front_config: Option<String>,
+    dns_mode: String,
+    dns_custom: String,
+    dns_guard: bool,
+    ip_family: String,
+    sub_exit: String,
+    sub_via_warp: bool,
+}
+
 /// 真正建立连接：下载核心 → 写配置 → 启动 → 通过代理探测出口
+///
+/// 凭证失效（导入错密钥、自动注册身份被吊销、内置共享身份被风控）时，
+/// 自动回退内置凭证重试一次，并在结果里带上 `fallback` / `fallbackReason`，
+/// 避免用户只看到"连接超时"却不知道是凭证的问题。
 #[tauri::command]
 pub async fn core_connect(
     app: AppHandle,
@@ -858,46 +893,100 @@ pub async fn core_connect(
     sub_via_warp: Option<bool>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
-    let dns_mode = dns_mode.unwrap_or_else(|| "preset".into());
-    let dns_custom = dns_custom.unwrap_or_default();
-    let dns_guard = dns_guard.unwrap_or(true);
-    let ip_family = ip_family.unwrap_or_else(|| "v4".into());
-    let sub_exit = sub_exit.unwrap_or_else(|| "warp".into());
-    let sub_via_warp = sub_via_warp.unwrap_or(false);
-    // 1. 先把之前的核心停掉并还原系统代理，避免端口冲突与旧代理残留
-    stop_child(&state);
-    let _ = restore_system_proxy(&app);
-
-    // 2. 确保核心存在
-    let exe = match download_core(&app) {
-        Ok(p) => p,
-        Err(e) => return Ok(CoreResult::fail(e)),
-    };
-    ensure_bundled_extras(&app);
-
-    // 3. 写配置
-    let cfg = render_config(
-        &cred,
-        &protocol,
+    let src = crate::credential::source_of(&cred).to_string();
+    let args = ConnectArgs {
+        protocol,
         port,
         api_port,
         mtu,
+        timeout_sec,
         allow_lan,
-        front_config.as_deref(),
-        &dns_mode,
-        &dns_custom,
-        dns_guard,
-        &ip_family,
-        &sub_exit,
-        sub_via_warp,
-    );
-    let cfg_path = match config_path(&app) {
-        Ok(p) => p,
-        Err(e) => return Ok(CoreResult::fail(e)),
+        front_config,
+        dns_mode: dns_mode.unwrap_or_else(|| "preset".into()),
+        dns_custom: dns_custom.unwrap_or_default(),
+        dns_guard: dns_guard.unwrap_or(true),
+        ip_family: ip_family.unwrap_or_else(|| "v4".into()),
+        sub_exit: sub_exit.unwrap_or_else(|| "warp".into()),
+        sub_via_warp: sub_via_warp.unwrap_or(false),
     };
-    if let Err(e) = std::fs::write(&cfg_path, &cfg) {
-        return Ok(CoreResult::fail(format!("写配置: {}", e)));
+
+    match attempt_connect(&app, state.inner(), &cred, &args) {
+        Ok(mut r) => {
+            r.credential_source = src;
+            Ok(r)
+        }
+        Err(first_err) => {
+            if src == "builtin" {
+                return Ok(CoreResult {
+                    error: first_err,
+                    credential_source: src,
+                    ..Default::default()
+                });
+            }
+            // 当前凭证建立不了隧道 → 回退内置共享凭证再试一次
+            let _ = app.emit(
+                "antun-credential",
+                serde_json::json!({
+                    "kind": "fallback",
+                    "source": "builtin",
+                    "ok": true,
+                    "error": first_err,
+                }),
+            );
+            match attempt_connect(&app, state.inner(), &builtin_credential(), &args) {
+                Ok(mut r) => {
+                    r.credential_source = "builtin".into();
+                    r.fallback = true;
+                    r.fallback_reason = first_err;
+                    Ok(r)
+                }
+                Err(second) => Ok(CoreResult {
+                    error: format!("{}；回退内置凭证仍失败：{}", first_err, second),
+                    credential_source: "builtin".into(),
+                    fallback: true,
+                    fallback_reason: first_err,
+                    ..Default::default()
+                }),
+            }
+        }
     }
+}
+
+/// 单次尝试：失败一律返回 Err（区分于"成功但结果不完美"），便于上层决定是否回退。
+fn attempt_connect(
+    app: &AppHandle,
+    state: &CoreState,
+    cred: &WarpCredential,
+    a: &ConnectArgs,
+) -> Result<CoreResult, String> {
+    let cred = fill_defaults(cred.clone());
+    let cred = &cred;
+    // 1. 先把之前的核心停掉并还原系统代理，避免端口冲突与旧代理残留
+    stop_child(state);
+    let _ = restore_system_proxy(app);
+
+    // 2. 确保核心存在
+    let exe = download_core(app)?;
+    ensure_bundled_extras(app);
+
+    // 3. 写配置
+    let cfg = render_config(
+        cred,
+        &a.protocol,
+        a.port,
+        a.api_port,
+        a.mtu,
+        a.allow_lan,
+        a.front_config.as_deref(),
+        &a.dns_mode,
+        &a.dns_custom,
+        a.dns_guard,
+        &a.ip_family,
+        &a.sub_exit,
+        a.sub_via_warp,
+    );
+    let cfg_path = config_path(app)?;
+    std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写配置: {}", e))?;
 
     // 4. 启动前先校验配置，配置非法直接返回具体错误（避免"正在连接"卡死）
     if let Ok(check) = hidden_command(&exe)
@@ -906,21 +995,18 @@ pub async fn core_connect(
     {
         let err_text = String::from_utf8_lossy(&check.stderr);
         if err_text.contains("failed") || err_text.contains("error") {
-            return Ok(CoreResult::fail(format!("核心配置校验失败：{}", err_text.trim())));
+            return Err(format!("核心配置校验失败：{}", err_text.trim()));
         }
     }
 
     // 5. 启动核心
-    let child = match hidden_command(&exe)
+    let child = hidden_command(&exe)
         .args(["-f", cfg_path.to_string_lossy().as_ref()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return Ok(CoreResult::fail(format!("启动核心: {}", e))),
-    };
+        .map_err(|e| format!("启动核心: {}", e))?;
     // 核心进程加入 Job：主程序异常退出时由系统一并结束，避免残留占用端口
     let job = bind_child_to_job(&child);
     if let Ok(mut guard) = state.job.lock() {
@@ -930,15 +1016,15 @@ pub async fn core_connect(
         *guard = Some(child);
     }
 
-    // 5. 等待核心就绪 + 真实出口探测（轮询，直到成功或超时）
+    // 6. 等待核心就绪 + 真实出口探测（轮询，直到成功或超时）
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     // MASQUE H3 / in-MASQUE 使用 gvisor + bbr，首次握手与双重出口探测
     // 可能接近 10 秒，5 秒兜底会把可用隧道误判为失败，因此下限设为 30 秒。
-    let max_wait = timeout_sec.max(30) as u64;
-    let proxy_url = format!("http://127.0.0.1:{}", port);
+    let max_wait = a.timeout_sec.max(30) as u64;
+    let proxy_url = format!("http://127.0.0.1:{}", a.port);
     let mut last_err = String::new();
 
     loop {
@@ -954,10 +1040,10 @@ pub async fn core_connect(
         match probe_exit(&proxy_url) {
             Ok(info) => {
                 // 隧道已验证可用：把系统代理指向本地核心，浏览器才会真正走 WARP
-                if let Err(e) = set_system_proxy(&app, port) {
-                    stop_child(&state);
-                    let _ = restore_system_proxy(&app);
-                    return Ok(CoreResult::fail(format!("设置系统代理失败：{}", e)));
+                if let Err(e) = set_system_proxy(app, a.port) {
+                    stop_child(state);
+                    let _ = restore_system_proxy(app);
+                    return Err(format!("设置系统代理失败：{}", e));
                 }
                 return Ok(info);
             }
@@ -965,12 +1051,12 @@ pub async fn core_connect(
         }
     }
 
-    // 超时：停掉核心，如实返回失败
-    stop_child(&state);
-    Ok(CoreResult::fail(format!(
+    // 超时：停掉核心并返回真实原因，交由上层决定是否用内置凭证回退
+    stop_child(state);
+    Err(format!(
         "连接超时：{}（请确认 WARP 凭证有效，且当前网络可访问 Cloudflare）",
         last_err
-    )))
+    ))
 }
 
 /// 通过本地代理真实探测出口（这是判断"已连接"的唯一依据）
@@ -1037,7 +1123,7 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
         colo: if warp == "on" || warp == "plus" { format!("WARP {}", warp) } else { "WARP".into() },
         latency,
         error: String::new(),
-        fatal: false,
+        ..Default::default()
     })
 }
 
@@ -1105,7 +1191,7 @@ pub async fn probe_status(
                     colo: String::new(),
                     latency: ms,
                     error: String::new(),
-                    fatal: false,
+                    ..Default::default()
                 }),
                 Err(e) => Ok(CoreResult::fail(e)),
             };
@@ -1125,7 +1211,7 @@ pub async fn probe_status(
                         colo: String::new(),
                         latency: ms,
                         error: String::new(),
-                        fatal: false,
+                        ..Default::default()
                     }),
                     Err(_) => Ok(CoreResult::fail(e)),
                 }

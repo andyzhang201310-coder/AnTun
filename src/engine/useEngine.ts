@@ -128,6 +128,18 @@ function bindTunnelWatcher() {
     const detail = (e as CustomEvent).detail || '隧道探测失败'
     void handleTunnelLost(String(detail))
   })
+  // 凭证事件：首次启动注册独享身份 / 连接时因凭证失效回退内置凭证
+  window.addEventListener('antun-credential', (e) => {
+    const d = ((e as CustomEvent).detail || {}) as { kind?: string; ok?: boolean; source?: string; error?: string }
+    const s = useStore.getState()
+    if (d.kind === 'fallback') {
+      s.log('WARN', `credential fallback: 当前凭证不可用，已回退内置共享凭证（${d.error || '未知原因'}）`)
+      s.addHistory('credential fallback -> builtin')
+    } else if (d.kind === 'registered') {
+      if (d.ok) s.log('INFO', `credential: 已为本机注册独享 WARP 身份（${d.source || 'auto'}）`)
+      else s.log('WARN', `credential: 独享身份注册失败，继续使用内置凭证（${d.error || '未知原因'}）`)
+    }
+  })
 }
 
 // 模块加载即注册：即使从「设置」页启动（首页未挂载）也能自动重连

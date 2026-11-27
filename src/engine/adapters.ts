@@ -143,6 +143,13 @@ export class DesktopAdapter implements EngineAdapter {
       throw new Error(result.error || '连接失败')
     }
 
+    // 当前凭证建立不了隧道、已自动回退内置共享凭证：如实告知用户
+    if (result.fallback) {
+      window.dispatchEvent(new CustomEvent('antun-credential', {
+        detail: { kind: 'fallback', ok: true, source: result.credentialSource || 'builtin', error: result.fallbackReason || '' },
+      }))
+    }
+
     this.connected = true
     return {
       connected: true,

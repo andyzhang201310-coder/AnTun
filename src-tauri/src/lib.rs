@@ -1,5 +1,6 @@
 mod core;
 mod core_update;
+mod credential;
 mod net_diag;
 mod node_test;
 mod psiphon;
@@ -113,6 +114,7 @@ pub fn run() {
             core::save_credential,
             core::load_credential,
             core::probe_status,
+            credential::credential_info,
             core_update::core_update_status,
             core_update::core_update,
             psiphon::psiphon_regions,
@@ -126,6 +128,16 @@ pub fn run() {
         .setup(|app| {
             // 上次异常退出若留下代理快照，先还原，避免系统代理指向已死的本地端口
             core::restore_orphan_proxy(app.handle());
+
+            // 首次启动为本机匿名注册独享 WARP 身份（后台线程，失败不影响使用：
+            // 没有独享身份时连接会自动回退内置共享凭证）
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                match credential::ensure_identity(&handle) {
+                    Ok(src) => eprintln!("[credential] identity ready: {}", src),
+                    Err(e) => eprintln!("[credential] auto register skipped: {}", e),
+                }
+            });
 
             // 关闭窗口 → 收进托盘，隧道与代理保持（VPN 客户端关键行为）
             if let Some(window) = app.get_webview_window("main") {

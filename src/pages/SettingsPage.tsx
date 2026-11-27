@@ -4,7 +4,7 @@ import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
 import { parseWarpCredential } from '../engine/credential'
-import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport } from '../desktop'
+import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport, CredentialInfo } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
@@ -13,6 +13,7 @@ export function SettingsPage() {
   const [warpText, setWarpText] = useState('')
   const [warpMsg, setWarpMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [hasCred, setHasCred] = useState(false)
+  const [credInfo, setCredInfo] = useState<CredentialInfo | null>(null)
   const [coreStatus, setCoreStatus] = useState<CoreUpdateStatus | null>(null)
   const [coreBusy, setCoreBusy] = useState<'mihomo' | 'psiphon' | null>(null)
   const [coreMsg, setCoreMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -38,6 +39,7 @@ export function SettingsPage() {
     void loadCoreStatus()
     desk.psiphonRegions?.().then((list: RegionOption[]) => setRegions(list)).catch(() => setRegions([]))
     desk.loadCredential?.().then((c: any) => setHasCred(!!c)).catch(() => setHasCred(true))
+    desk.credentialInfo?.().then(setCredInfo).catch(() => setCredInfo(null))
     // 开机自启以系统实际状态为准，避免界面与注册表不一致
     desk.getAutoStart?.().then((v: boolean) => {
       if (v !== useStore.getState().settings.autoStart) store.setSetting('autoStart', v)
@@ -61,6 +63,7 @@ export function SettingsPage() {
       if (isDesk) {
         await (window as any).AnTunDesktop.saveCredential(cred)
         setHasCred(true)
+        void (window as any).AnTunDesktop.credentialInfo?.().then(setCredInfo).catch(() => {})
       }
       setWarpMsg({ ok: true, text: isDesk ? t('accountSaved') : t('accountWebOnly') })
       store.log('INFO', 'warp credential imported')
@@ -138,6 +141,17 @@ export function SettingsPage() {
             {hasCred ? <><Check size={12} />{t('accountReady')}</> : <><AlertCircle size={12} />{t('accountMissing')}</>}
           </span>
         } />
+        <FieldRow
+          title={t('credIdentity')}
+          desc={credInfo ? `${credInfo.endpoint} · ${credInfo.addressV4}` : undefined}
+          control={
+            credInfo?.unique ? (
+              <span className="badge badge-green"><ShieldCheck size={12} />{t('credUnique')}</span>
+            ) : (
+              <span className="badge badge-orange"><AlertCircle size={12} />{t('credShared')}</span>
+            )
+          }
+        />
         <div style={{ marginTop: 10 }}>
           <textarea
             className="input"

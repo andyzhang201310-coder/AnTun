@@ -23,6 +23,8 @@ export interface WarpCredential {
   /** MASQUE 协议的 ECDSA 密钥（base64，MASQUE H3/H2/in-MASQUE） */
   masquePrivateKey?: string
   masquePublicKey?: string
+  /** 凭证来源：user / auto / 空（内置共享） */
+  source?: string
 }
 
 export interface AppInfo {
@@ -42,6 +44,21 @@ export interface CoreResult {
   error: string
   /** 致命错误（核心进程已退出），前端应立即断开而不是继续重试 */
   fatal?: boolean
+  /** 本次连接实际使用的凭证来源：user / auto / builtin */
+  credentialSource?: string
+  /** 是否发生了"凭证失败 → 回退内置凭证"的降级 */
+  fallback?: boolean
+  /** 降级前那次失败的原因 */
+  fallbackReason?: string
+}
+
+/** 当前凭证身份（设置页展示"独享 / 共享"） */
+export interface CredentialInfo {
+  source: 'user' | 'auto' | 'builtin' | string
+  unique: boolean
+  addressV4: string
+  addressV6: string
+  endpoint: string
 }
 
 export interface CoreComponentStatus {
@@ -138,6 +155,7 @@ declare global {
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
       saveCredential: (cred: WarpCredential) => Promise<void>
       loadCredential: () => Promise<WarpCredential>
+      credentialInfo: () => Promise<CredentialInfo>
       probeStatus: (port: number, lite?: boolean) => Promise<CoreResult>
       coreUpdateStatus: () => Promise<CoreUpdateStatus>
       coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
@@ -161,6 +179,12 @@ export function initDesktopBridge() {
   let quitCallback: (() => void) | null = null
   void listen('antun-quit-request', () => {
     quitCallback?.()
+  })
+
+  // 凭证相关事件（首次启动注册独享身份、连接失败回退内置凭证）
+  // 统一转成 window 事件，前端各处沿用同一个监听入口
+  void listen('antun-credential', (e) => {
+    window.dispatchEvent(new CustomEvent('antun-credential', { detail: e.payload }))
   })
 
   window.AnTunDesktop = {
@@ -195,6 +219,7 @@ export function initDesktopBridge() {
     coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),
     loadCredential: () => invoke<WarpCredential>('load_credential'),
+    credentialInfo: () => invoke<CredentialInfo>('credential_info'),
     probeStatus: (port, lite) => invoke<CoreResult>('probe_status', { port, lite: !!lite }),
     coreUpdateStatus: () => invoke<CoreUpdateStatus>('core_update_status'),
     coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
