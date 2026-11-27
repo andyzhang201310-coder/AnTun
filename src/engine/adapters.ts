@@ -2,48 +2,51 @@ import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, LatencyPoint, 
 import { newId } from '../store'
 import type { CoreResult, WarpCredential } from '../desktop'
 
-const COUNTRIES = [
-  { country: 'US', colo: 'LAX', city: 'Los Angeles' },
-  { country: 'US', colo: 'SFO', city: 'San Francisco' },
-  { country: 'SG', colo: 'SIN', city: 'Singapore' },
-  { country: 'JP', colo: 'NRT', city: 'Tokyo' },
-  { country: 'DE', colo: 'FRA', city: 'Frankfurt' },
-  { country: 'GB', colo: 'LHR', city: 'London' },
-  { country: 'HK', colo: 'HKG', city: 'Hong Kong, China' },
-  { country: 'NL', colo: 'AMS', city: 'Amsterdam' },
-  { country: 'KR', colo: 'ICN', city: 'Seoul' },
-  { country: 'AU', colo: 'SYD', city: 'Sydney' },
-]
-const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min) + min)
-
-/** 真实的 WARP 端点（engage.cloudflareclient.com 解析出的官方地址池） */
-const REAL_WARP_IPS = [
-  '162.159.192.1', '162.159.193.1', '162.159.195.1', '188.114.96.1',
-  '188.114.97.1', '188.114.98.1', '188.114.99.1', '104.16.0.1',
-]
-
 /**
- * 真实端点扫描：用 TCP 连接测量到 Cloudflare 边缘的延迟。
- * 浏览器 WebView 里无法直接测 UDP/TCP 裸连接，因此：
- * - Tauri 桌面端：通过 IPC 让 Rust 侧做真实 TCP 探测（下方 DesktopAdapter.scan）
- * - 纯 Web 端：降级为 DNS 预解析 + TCP 可达性推断，并明确标注为估算
+ * Cloudflare WARP 真实端点池：从 engage.cloudflareclient.com 解析出的官方 anycast 地址段。
+ * 这些都是 anycast，具体落到哪个 PoP 由运营商到该地址的路由决定，
+ * 因此不能像普通节点那样标注"US/SG/JP"国家，只能用实测延迟排序。
  */
-function makeEndpoints(protocol: Protocol, measured?: Map<string, number>): Endpoint[] {
-  return COUNTRIES.map((c, i) => {
-    const host = REAL_WARP_IPS[i % REAL_WARP_IPS.length]
-    const ms = measured?.get(host) ?? rand(30, 260)
+const WARP_ENDPOINT_HOSTS = [
+  '162.159.192.1', '162.159.192.7',
+  '162.159.193.1', '162.159.193.7',
+  '162.159.195.1', '162.159.195.7',
+  '188.114.96.1', '188.114.96.7',
+  '188.114.97.1', '188.114.98.1',
+  '188.114.99.1', '188.114.99.7',
+]
+/** MASQUE 端点与 SNI 由 Cloudflare 固定下发，不参与择优 */
+const MASQUE_ENDPOINT = { host: '162.159.198.1', port: 500 }
+const WARP_PORT = 2408
+
+function makeEndpoints(protocol: Protocol, probes?: Map<string, number>): Endpoint[] {
+  if (protocol.startsWith('masque')) {
+    const { host, port } = MASQUE_ENDPOINT
+    return [{
+      id: `${protocol}:${host}:${port}`,
+      host, port,
+      country: '', colo: '', city: '',
+      latency: 0, loss: 0, protocol,
+    }]
+  }
+  const list = WARP_ENDPOINT_HOSTS.map((host) => {
+    const rtt = probes?.get(host)
+    const latency = rtt !== undefined && rtt > 0 ? rtt : 0
     return {
-      id: `${c.colo}-${i}-${protocol}`,
+      id: `${protocol}:${host}:${WARP_PORT}`,
       host,
-      port: protocol.startsWith('masque') ? 443 : 2408,
-      country: c.country,
-      colo: c.colo,
-      city: c.city,
-      latency: ms,
-      loss: 0,
+      port: WARP_PORT,
+      country: '',
+      colo: '',
+      city: '',
+      latency,
+      // 未探测 = 0（未知）；探测过但握手失败 = 1（不可用）
+      loss: rtt === undefined ? 0 : rtt > 0 ? 0 : 1,
       protocol,
     }
-  }).sort((a, b) => a.latency - b.latency)
+  })
+  // 已测通的按实测延迟升序，未测/失败的排后面（不丢弃，用户仍可手动锁）
+  return list.sort((a, b) => (a.latency || Number.MAX_SAFE_INTEGER) - (b.latency || Number.MAX_SAFE_INTEGER))
 }
 
 /**
@@ -111,7 +114,29 @@ export class DesktopAdapter implements EngineAdapter {
   }
 
   async scan(opts?: { protocol?: Protocol }): Promise<Endpoint[]> {
-    return makeEndpoints(opts?.protocol || 'awg')
+    const protocol = opts?.protocol || 'awg'
+    const base = makeEndpoints(protocol)
+    // MASQUE 端点固定，没有可择优的候选
+    if (protocol.startsWith('masque')) return base
+
+    let cred: WarpCredential | null = null
+    try {
+      cred = await this.desk.loadCredential() as WarpCredential | null
+    } catch {
+      return base
+    }
+    if (!cred?.privateKey || !cred?.peerPublicKey) return base
+
+    // Rust 侧用真实凭证逐端点握手测速：不可达的端点会返回 rtt=-1
+    try {
+      const probes = await this.desk.probeEndpoints(cred, base.map((e) => e.host), WARP_PORT, 0)
+      const map = new Map<string, number>()
+      for (const p of probes) map.set(p.host, p.ok ? p.rtt : -1)
+      if (!map.size) return base
+      return makeEndpoints(protocol, map)
+    } catch {
+      return base
+    }
   }
 
   async connect(opts: ConnectOptions): Promise<ConnState> {
@@ -119,6 +144,11 @@ export class DesktopAdapter implements EngineAdapter {
     if (!cred) {
       throw new Error('尚未配置 WARP 凭证：请先导入 WARP 账户（设置页），否则无法建立真实连接')
     }
+
+    // 选定端点只对 WireGuard 系生效（MASQUE 的 server/SNI 固定）
+    const picked = opts.endpoint && !opts.protocol.startsWith('masque')
+      ? { host: opts.endpoint.host, port: opts.endpoint.port }
+      : null
 
     const result = await this.desk.coreConnect(
       cred,
@@ -137,6 +167,7 @@ export class DesktopAdapter implements EngineAdapter {
         subExit: opts.settings.subExit ?? 'warp',
         subViaWarp: opts.settings.subViaWarp ?? false,
       },
+      picked,
     ) as CoreResult
 
     if (!result.ok) {
@@ -150,12 +181,25 @@ export class DesktopAdapter implements EngineAdapter {
       }))
     }
 
+    // 用核心回报的端点校正展示：配置里写的是哪个，界面就显示哪个
+    const used: Endpoint | null = result.endpointHost
+      ? {
+        id: `warp:${result.endpointHost}:${result.endpointPort || WARP_PORT}`,
+        host: result.endpointHost,
+        port: result.endpointPort || WARP_PORT,
+        country: '', colo: '', city: '',
+        latency: result.latency,
+        loss: 0,
+        protocol: opts.protocol,
+      }
+      : opts.endpoint ?? null
+
     this.connected = true
     return {
       connected: true,
       connecting: false,
       protocol: opts.protocol,
-      endpoint: opts.endpoint ?? null,
+      endpoint: used,
       exitIp: result.exitIp,
       country: result.country,
       colo: result.colo || 'WARP',

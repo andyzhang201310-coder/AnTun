@@ -89,6 +89,11 @@ pub struct CoreResult {
     /// 降级前那次失败的原因（便于用户在日志里看到根因）
     #[serde(default)]
     pub fallback_reason: String,
+    /// 本次连接实际写入配置的出口端点（用于核对"择优/锁定"是否真的生效）
+    #[serde(default)]
+    pub endpoint_host: String,
+    #[serde(default)]
+    pub endpoint_port: u16,
 }
 
 impl CoreResult {
@@ -298,7 +303,7 @@ fn stop_child(state: &CoreState) {
 /// 崩溃、任务管理器结束进程）系统会一并结束子进程，不留孤儿核心。
 /// 失败时静默降级为普通子进程，不影响连接。
 #[cfg(windows)]
-fn bind_child_to_job(child: &Child) -> Option<isize> {
+pub(crate) fn bind_child_to_job(child: &Child) -> Option<isize> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::JobObjects::{
@@ -334,21 +339,26 @@ fn bind_child_to_job(child: &Child) -> Option<isize> {
 }
 
 #[cfg(not(windows))]
-fn bind_child_to_job(_child: &Child) -> Option<isize> {
+pub(crate) fn bind_child_to_job(_child: &Child) -> Option<isize> {
     None
+}
+
+/// 关闭 Job 句柄：KILL_ON_JOB_CLOSE 生效，句柄所属的子进程会被系统结束。
+pub(crate) fn close_job_handle(handle: isize) {
+    #[cfg(windows)]
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(
+            handle as windows_sys::Win32::Foundation::HANDLE,
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = handle;
 }
 
 fn close_job(state: &CoreState) {
     if let Ok(mut guard) = state.job.lock() {
         if let Some(handle) = guard.take() {
-            #[cfg(windows)]
-            unsafe {
-                let _ = windows_sys::Win32::Foundation::CloseHandle(
-                    handle as windows_sys::Win32::Foundation::HANDLE,
-                );
-            }
-            #[cfg(not(windows))]
-            let _ = handle;
+            close_job_handle(handle);
         }
     }
 }
@@ -866,6 +876,10 @@ struct ConnectArgs {
     ip_family: String,
     sub_exit: String,
     sub_via_warp: bool,
+    /// 选定的出口端点（自动择优 / 手动锁定），为空则用凭证注册下发的端点。
+    /// 只对 WireGuard 系（wg/awg/gool 外层）生效：MASQUE 端点由 Cloudflare 固定下发。
+    endpoint_host: Option<String>,
+    endpoint_port: Option<u16>,
 }
 
 /// 真正建立连接：下载核心 → 写配置 → 启动 → 通过代理探测出口
@@ -891,6 +905,8 @@ pub async fn core_connect(
     ip_family: Option<String>,
     sub_exit: Option<String>,
     sub_via_warp: Option<bool>,
+    endpoint_host: Option<String>,
+    endpoint_port: Option<u16>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
     let src = crate::credential::source_of(&cred).to_string();
@@ -908,6 +924,8 @@ pub async fn core_connect(
         ip_family: ip_family.unwrap_or_else(|| "v4".into()),
         sub_exit: sub_exit.unwrap_or_else(|| "warp".into()),
         sub_via_warp: sub_via_warp.unwrap_or(false),
+        endpoint_host: endpoint_host.filter(|h| !h.trim().is_empty()),
+        endpoint_port: endpoint_port.filter(|p| *p > 0),
     };
 
     match attempt_connect(&app, state.inner(), &cred, &args) {
@@ -959,7 +977,17 @@ fn attempt_connect(
     cred: &WarpCredential,
     a: &ConnectArgs,
 ) -> Result<CoreResult, String> {
-    let cred = fill_defaults(cred.clone());
+    let mut cred = fill_defaults(cred.clone());
+    // 选定的端点覆盖凭证里的默认端点：这是「自动择优 / 手动锁定」真正生效的地方。
+    // MASQUE 系不走这里（端点与 SNI 由 Cloudflare 固定下发，改了反而连不上）。
+    if !a.protocol.starts_with("masque") {
+        if let Some(h) = a.endpoint_host.as_ref() {
+            cred.endpoint_host = h.clone();
+        }
+        if let Some(p) = a.endpoint_port {
+            cred.endpoint_port = p;
+        }
+    }
     let cred = &cred;
     // 1. 先把之前的核心停掉并还原系统代理，避免端口冲突与旧代理残留
     stop_child(state);
@@ -1038,7 +1066,10 @@ fn attempt_connect(
         std::thread::sleep(Duration::from_millis(600));
 
         match probe_exit(&proxy_url) {
-            Ok(info) => {
+            Ok(mut info) => {
+                // 如实回报实际使用的端点，便于前端核对而不是靠猜
+                info.endpoint_host = cred.endpoint_host.clone();
+                info.endpoint_port = cred.endpoint_port;
                 // 隧道已验证可用：把系统代理指向本地核心，浏览器才会真正走 WARP
                 if let Err(e) = set_system_proxy(app, a.port) {
                     stop_child(state);

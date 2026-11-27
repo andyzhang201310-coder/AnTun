@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react'
 import { useStore, useLive, flushPersist } from '../store'
 import { createAdapter } from './adapters'
 import { initDesktopBridge } from '../desktop'
-import type { EngineAdapter, ConnectOptions, ConnState } from '../types'
+import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, Settings } from '../types'
 import { tr } from '../i18n'
 
 // ============ 全局单例引擎 ============
@@ -47,6 +47,29 @@ async function engineDisconnect(): Promise<void> {
   s.addHistory('disconnected')
 }
 
+/**
+ * 按设置里的排序偏好排列候选端点。
+ * WARP 端点是 anycast，"colo 优先"没有意义，退化为按地址排序便于人工核对。
+ */
+function rankEndpoints(list: Endpoint[], rank: Settings['endpointRank']): Endpoint[] {
+  const arr = [...list]
+  if (rank === 'loss') {
+    return arr.sort((a, b) => a.loss - b.loss || (a.latency || Number.MAX_SAFE_INTEGER) - (b.latency || Number.MAX_SAFE_INTEGER))
+  }
+  if (rank === 'colo') return arr.sort((a, b) => a.host.localeCompare(b.host))
+  return arr.sort((a, b) => (a.latency || Number.MAX_SAFE_INTEGER) - (b.latency || Number.MAX_SAFE_INTEGER))
+}
+
+/**
+ * 自动择优候选：优先用「实测可用」的端点（latency>0 且无丢包），
+ * 取排名前 3 个依次尝试；一个都没测过时退回全部列表（连接时仍会带默认端点）。
+ */
+function autoCandidates(list: Endpoint[], rank: Settings['endpointRank']): Endpoint[] {
+  const tested = list.filter((e) => e.latency > 0 && e.loss === 0)
+  const pool = tested.length ? tested : list
+  return rankEndpoints(pool, rank).slice(0, 3)
+}
+
 async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<boolean> {
   const s = useStore.getState()
   if (s.conn.connecting || s.conn.connected) return false
@@ -62,26 +85,52 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
     if (s.settings.connMode === 'subscription' && !frontNode) {
       throw new Error('订阅模式尚未选择前置节点：请到「模式」页导入订阅并选一个节点')
     }
-    const opts: ConnectOptions = {
-      protocol: s.settings.proto,
-      endpoint: pinned,
-      frontConfig: frontNode?.config,
-      captureMode: s.settings.captureMode,
-      psiphon: s.settings.psiphon,
-      warpInWarp: s.settings.warpInWarp,
-      settings: s.settings,
-      ...optsOverride,
-    }
+    // 锁定端点只试一个；自动择优按实测排名试前 3 个（失败自动换下一个）
+    const plan: (Endpoint | null)[] = pinned
+      ? [pinned]
+      : (() => {
+        const list = autoCandidates(s.endpoints, s.settings.endpointRank)
+        return list.length ? list : [null]
+      })()
     s.addHistory('render config -> start core')
     s.addHistory('probe endpoint -> verify exit')
-    const state = await adapter.connect(opts)
-    useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
-    useLive.getState().resetLive()
-    ;(window as any)._antunSyncTray?.()
-    adapter.probe((p) => useLive.getState().pushLatency(p))
-    s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
-    s.addHistory(`connected ${state.session}`)
-    return true
+
+    let lastErr = '连接失败'
+    for (let i = 0; i < plan.length; i++) {
+      const ep = plan[i]
+      // 前几次给较短超时，保证失败能快速换端点；最后一次用用户设置的完整超时
+      const timeoutSec = i === plan.length - 1 ? s.settings.timeoutSec : Math.min(15, s.settings.timeoutSec)
+      const opts: ConnectOptions = {
+        protocol: s.settings.proto,
+        endpoint: ep,
+        frontConfig: frontNode?.config,
+        captureMode: s.settings.captureMode,
+        psiphon: s.settings.psiphon,
+        warpInWarp: s.settings.warpInWarp,
+        settings: { ...s.settings, timeoutSec },
+        ...optsOverride,
+      }
+      try {
+        const state = await adapter.connect(opts)
+        useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
+        useLive.getState().resetLive()
+        ;(window as any)._antunSyncTray?.()
+        adapter.probe((p) => useLive.getState().pushLatency(p))
+        if (ep) {
+          s.log('INFO', `${pinned ? 'pinned' : 'auto select'} endpoint -> ${ep.host}:${ep.port}${ep.latency ? ` (${ep.latency}ms)` : ''}`)
+        }
+        s.log('INFO', `connected: exit=${state.exitIp} colo=${state.colo} ${state.latency}ms`)
+        s.addHistory(`connected ${state.session}`)
+        return true
+      } catch (e: any) {
+        lastErr = e.message
+        s.log('WARN', `endpoint ${ep ? `${ep.host}:${ep.port}` : 'default'} failed: ${e.message}`)
+        if (i < plan.length - 1) {
+          s.addHistory(`switch endpoint: ${ep?.host ?? '—'} -> ${plan[i + 1]?.host ?? '—'}`, false)
+        }
+      }
+    }
+    throw new Error(lastErr)
   } catch (e: any) {
     useStore.getState().setConn({ connecting: false, connected: false })
     s.log('ERROR', `connect failed: ${e.message}`)
@@ -287,9 +336,8 @@ export function useEngine() {
     try {
       const adapter = ensureAdapter()
       let endpoints = await adapter.scan({ protocol: s.settings.proto })
-      // 排序偏好
-      if (s.settings.endpointRank === 'loss') endpoints = [...endpoints].sort((a, b) => a.loss - b.loss || a.latency - b.latency)
-      if (s.settings.endpointRank === 'colo') endpoints = [...endpoints].sort((a, b) => a.colo.localeCompare(b.colo))
+      // 排序偏好：未探测的端点一律排在已测通的后面
+      endpoints = rankEndpoints(endpoints, s.settings.endpointRank)
       // 国家过滤
       const allowed = s.allowedCountries
       const filtered = allowed.length ? endpoints.filter((e) => allowed.includes(e.country)) : endpoints

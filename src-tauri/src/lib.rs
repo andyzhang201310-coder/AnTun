@@ -1,6 +1,7 @@
 mod core;
 mod core_update;
 mod credential;
+mod endpoint_probe;
 mod net_diag;
 mod node_test;
 mod psiphon;
@@ -115,6 +116,7 @@ pub fn run() {
             core::load_credential,
             core::probe_status,
             credential::credential_info,
+            endpoint_probe::endpoint_probe,
             core_update::core_update_status,
             core_update::core_update,
             psiphon::psiphon_regions,

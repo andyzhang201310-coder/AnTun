@@ -50,6 +50,19 @@ export interface CoreResult {
   fallback?: boolean
   /** 降级前那次失败的原因 */
   fallbackReason?: string
+  /** 本次连接实际写入配置的出口端点 */
+  endpointHost?: string
+  endpointPort?: number
+}
+
+/** 单个 WARP 端点的真实探测结果 */
+export interface EndpointProbe {
+  host: string
+  port: number
+  /** 端到端毫秒；-1 表示不可用 */
+  rtt: number
+  ok: boolean
+  error: string
 }
 
 /** 当前凭证身份（设置页展示"独享 / 共享"） */
@@ -149,7 +162,7 @@ declare global {
       quit: () => Promise<void>
       onQuitRequest: (cb: () => void) => void
       // 真实连接核心
-      coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string, net?: NetOptions) => Promise<CoreResult>
+      coreConnect: (cred: WarpCredential, protocol: string, port: number, apiPort: number, mtu: number, timeoutSec: number, allowLan: boolean, frontConfig?: string, net?: NetOptions, endpoint?: { host: string; port: number } | null) => Promise<CoreResult>
       coreStop: () => Promise<void>
       coreStatus: () => Promise<boolean>
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
@@ -157,6 +170,7 @@ declare global {
       loadCredential: () => Promise<WarpCredential>
       credentialInfo: () => Promise<CredentialInfo>
       probeStatus: (port: number, lite?: boolean) => Promise<CoreResult>
+      probeEndpoints: (cred: WarpCredential, hosts: string[], port: number, mtu: number) => Promise<EndpointProbe[]>
       coreUpdateStatus: () => Promise<CoreUpdateStatus>
       coreUpdate: (kind: 'mihomo' | 'psiphon') => Promise<CoreUpdateResult>
       psiphonRegions: () => Promise<RegionOption[]>
@@ -204,9 +218,11 @@ export function initDesktopBridge() {
       quitCallback = cb
     },
     // 真实核心链路
-    coreConnect: (cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig, net) =>
+    coreConnect: (cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig, net, endpoint) =>
       invoke<CoreResult>('core_connect', {
         cred, protocol, port, apiPort, mtu, timeoutSec, allowLan, frontConfig,
+        endpointHost: endpoint?.host ?? null,
+        endpointPort: endpoint?.port ?? null,
         dnsMode: net?.dnsMode ?? 'preset',
         dnsCustom: net?.dnsCustom ?? '',
         dnsGuard: net?.dnsGuard ?? true,
@@ -221,6 +237,7 @@ export function initDesktopBridge() {
     loadCredential: () => invoke<WarpCredential>('load_credential'),
     credentialInfo: () => invoke<CredentialInfo>('credential_info'),
     probeStatus: (port, lite) => invoke<CoreResult>('probe_status', { port, lite: !!lite }),
+    probeEndpoints: (cred, hosts, port, mtu) => invoke<EndpointProbe[]>('endpoint_probe', { cred, hosts, port, mtu }),
     coreUpdateStatus: () => invoke<CoreUpdateStatus>('core_update_status'),
     coreUpdate: (kind) => invoke<CoreUpdateResult>('core_update', { kind }),
     psiphonRegions: () => invoke<RegionOption[]>('psiphon_regions'),

@@ -18,7 +18,7 @@ export function NodesPage() {
   useEffect(() => { if (!endpoints.length && !scanning) scan() }, [])
 
   const list = endpoints.filter((e) => {
-    const matchQ = !query || `${e.host} ${e.country} ${e.colo} ${e.city}`.toLowerCase().includes(query.toLowerCase())
+    const matchQ = !query || `${e.host} ${e.protocol}`.toLowerCase().includes(query.toLowerCase())
     const matchP = protoFilter === 'all' || e.protocol === protoFilter
     return matchQ && matchP
   })
@@ -34,7 +34,7 @@ export function NodesPage() {
             <Search size={16} className="muted" />
             <input
               value={query} onChange={(e) => setQuery(e.target.value)}
-              placeholder={`${t('nodeHost')} / ${t('nodeCountry')} / ${t('nodeColo')}`}
+              placeholder={`${t('nodeHost')} / ${t('nodeProto')}`}
               style={{ background: 'none', border: 'none', outline: 'none', padding: '10px 0', flex: 1, fontSize: 13, color: 'var(--text)' }}
             />
           </div>
@@ -51,20 +51,22 @@ export function NodesPage() {
         </div>
       </Card>
 
-      <Card title={<><Zap size={16} />{t('cacheEndpoints')}</>} sub={t('totalNodes', { n: list.length })}>
+      <Card title={<><Zap size={16} />{t('cacheEndpoints')}</>} sub={`${t('totalNodes', { n: list.length })} · ${t('probeHint')}`}>
         <div className="table-head">
-          <span>{t('nodeHost')}</span><span>{t('nodeCountry')}</span>
-          <span className="hide-sm">{t('nodeColo')}</span><span>{t('nodePing')}</span><span>{t('nodeAction')}</span>
+          <span>{t('nodeHost')}</span><span>{t('nodeProto')}</span>
+          <span className="hide-sm">{t('endpointState')}</span><span>{t('nodePing')}</span><span>{t('nodeAction')}</span>
         </div>
         {list.length ? list.map((e) => (
           <div key={e.id} className={`node-row ${pinnedId === e.id ? 'selected' : ''}`}
             onClick={() => store.pinEndpoint(pinnedId === e.id ? null : e.id)} tabIndex={0}
             onKeyDown={(ev) => { if (ev.key === 'Enter') store.pinEndpoint(pinnedId === e.id ? null : e.id) }}>
             <span className="cell mono strong">{e.host}:{e.port}</span>
-            <span className="cell">{e.country} <span className="muted">· {e.city}</span></span>
-            <span className="cell hide-sm">{e.colo} <span className="muted">· {e.protocol.toUpperCase()}</span></span>
-            <span className="cell" style={{ color: e.latency < 250 ? 'var(--success)' : e.latency < 600 ? 'var(--warn)' : 'var(--danger)', fontWeight: 700 }}>
-              {e.latency}ms {e.loss > 0 && <span className="muted" style={{ fontWeight: 400 }}>({Math.round(e.loss * 100)}%)</span>}
+            <span className="cell">{e.protocol.toUpperCase()}</span>
+            <span className="cell hide-sm" style={{ color: e.loss > 0 ? 'var(--danger)' : e.latency > 0 ? 'var(--success)' : 'var(--text-3)' }}>
+              {e.loss > 0 ? t('probeFailed') : e.latency > 0 ? t('probeOk') : t('probeUntested')}
+            </span>
+            <span className="cell" style={{ color: e.latency > 0 ? (e.latency < 250 ? 'var(--success)' : e.latency < 600 ? 'var(--warn)' : 'var(--danger)') : 'var(--text-3)', fontWeight: 700 }}>
+              {e.latency > 0 ? `${e.latency}ms` : '—'}
             </span>
             <span className="cell">
               {pinnedId === e.id ? <Unlock size={16} color="var(--brand)" /> : <Lock size={16} className="muted" />}

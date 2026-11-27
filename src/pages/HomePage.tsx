@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle } from 'lucide-react'
 import { useStore, useLive } from '../store'
 import { useEngine } from '../engine/useEngine'
@@ -14,7 +14,15 @@ export function HomePage() {
   const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
 
-  const countries = Array.from(new Set(endpoints.map((e) => e.country)))
+  // 首页也需要候选端点：挂载后延迟一次真实探测，避免和首屏渲染抢资源
+  useEffect(() => {
+    if (endpoints.length || scanning) return
+    const timer = window.setTimeout(() => void scan(), 1500)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const countries = Array.from(new Set(endpoints.map((e) => e.country).filter(Boolean)))
   const pinned = endpoints.find((e) => e.id === pinnedId)
   const subNode = settings.connMode === 'subscription' ? subNodes.find((n) => n.id === settings.frontNodeId) : undefined
   const subStat = subNode ? nodeStats[subNode.id] : undefined
@@ -54,7 +62,10 @@ export function HomePage() {
 
   const pickNode = async (value: string) => {
     if (switching) return
-    const [kind, id] = value.split(':')
+    // 端点 id 形如 awg:162.159.192.1:2408，不能按 ':' 全拆，只切第一段
+    const sep = value.indexOf(':')
+    const kind = value.slice(0, sep)
+    const id = value.slice(sep + 1)
     if (kind === 'warp') {
       applyNode('warp', id === 'auto' ? null : id)
       store.log('INFO', `node switch -> warp ${id === 'auto' ? 'auto' : id}`)
@@ -116,7 +127,9 @@ export function HomePage() {
               <optgroup label={t('modeWarp')}>
                 <option value="warp:auto">{t('autoSelect')}</option>
                 {endpoints.map((e) => (
-                  <option key={e.id} value={`warp:${e.id}`}>{e.host}:{e.port} · {e.country} · {e.latency}ms</option>
+                  <option key={e.id} value={`warp:${e.id}`}>
+                    {e.host}:{e.port} · {e.latency > 0 ? `${e.latency}ms` : t('probeUntested')}
+                  </option>
                 ))}
               </optgroup>
               <optgroup label={t('subscriptionNodes')}>
@@ -192,7 +205,14 @@ export function HomePage() {
                 )
               })}
             </div>
-          ) : <div className="muted" style={{ fontSize: 12 }}>{t('noData')}</div>}
+          ) : (
+            <div>
+              <div className="strong mono" style={{ fontSize: 13 }}>
+                {conn.country ? `${conn.country} · ${conn.colo}` : '—'}
+              </div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.6 }}>{t('endpointGeoHint')}</div>
+            </div>
+          )}
         </Card>
         <Card title={<><Radio size={16} />{t('liveLatency')}</>}
           sub={latestLatency ? t('latencySample', { v: latestLatency, n: latencyPoints.length }) : t('latencyEmpty')}>
@@ -232,7 +252,9 @@ export function HomePage() {
               <Star size={18} fill="var(--brand)" color="var(--brand)" />
               <div style={{ flex: 1 }}>
                 <div className="strong mono">{pinned.host}:{pinned.port}</div>
-                <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{pinned.country} · {pinned.colo} · {pinned.latency}ms · {pinned.protocol.toUpperCase()}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+                  {pinned.latency > 0 ? `${pinned.latency}ms · ` : ''}{pinned.protocol.toUpperCase()}
+                </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => store.pinEndpoint(null)}>{t('unlock')}</button>
             </div>
@@ -248,13 +270,15 @@ export function HomePage() {
       <Card title={<><Server size={16} />{t('cacheEndpoints')}</>} sub={`${t('totalNodes', { n: endpoints.length })} · ${t('cacheHint')}`}>
         {endpoints.length ? (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="table-head"><span>{t('nodeHost')}</span><span>{t('nodeCountry')}</span><span className="hide-sm">{t('nodeColo')}</span><span>{t('nodePing')}</span><span /></div>
+            <div className="table-head"><span>{t('nodeHost')}</span><span>{t('nodeProto')}</span><span className="hide-sm">{t('endpointState')}</span><span>{t('nodePing')}</span><span /></div>
             {endpoints.slice(0, 8).map((e) => (
               <div key={e.id} className={`node-row ${pinnedId === e.id && settings.connMode !== 'subscription' ? 'selected' : ''}`} onClick={() => void pinWarp(pinnedId === e.id ? null : e.id)} tabIndex={0}>
                 <span className="cell mono strong">{e.host}:{e.port}</span>
-                <span className="cell">{e.country}</span>
-                <span className="cell hide-sm">{e.colo}</span>
-                <span className="cell" style={{ color: e.latency < 250 ? 'var(--success)' : 'var(--warn)', fontWeight: 700 }}>{e.latency}ms</span>
+                <span className="cell">{e.protocol.toUpperCase()}</span>
+                <span className="cell hide-sm">{e.loss > 0 ? t('probeFailed') : e.latency > 0 ? t('probeOk') : t('probeUntested')}</span>
+                <span className="cell" style={{ color: e.latency > 0 ? (e.latency < 250 ? 'var(--success)' : 'var(--warn)') : 'var(--text-3)', fontWeight: 700 }}>
+                  {e.latency > 0 ? `${e.latency}ms` : '—'}
+                </span>
                 <span className="cell">{pinnedId === e.id && settings.connMode !== 'subscription' ? <Star size={15} fill="var(--brand)" color="var(--brand)" /> : <Star size={15} className="muted" />}</span>
               </div>
             ))}
