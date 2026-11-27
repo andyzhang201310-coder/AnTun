@@ -109,6 +109,12 @@ interface AppStore {
   endpoints: Endpoint[]
   scanning: boolean
   /**
+   * 订阅节点延迟测试进行中。放 store 而不是组件 state：
+   * 测速会在首页触发，用户切页后首页卸载，按钮的「测试中」状态不能丢；
+   * 同时也是重入锁，避免连点起两次测速核心。
+   */
+  nodeTesting: boolean
+  /**
    * 已受理「取消连接」但连接流程还没真正退出。
    * 放在 store 而不是组件里：切页时首页会卸载，这个提示不能丢。
    */
@@ -133,6 +139,7 @@ interface AppStore {
   setConn: (c: Partial<ConnState>) => void
   setEndpoints: (e: Endpoint[]) => void
   setScanning: (b: boolean) => void
+  setNodeTesting: (b: boolean) => void
   setCancelling: (b: boolean) => void
   setNodeQuery: (q: string) => void
   setSavedQuery: (q: string) => void
@@ -216,6 +223,7 @@ export const useStore = create<AppStore>()(
       conn: DEFAULT_CONN,
       endpoints: [],
       scanning: false,
+      nodeTesting: false,
       cancelling: false,
       nodeQuery: '',
       savedQuery: '',
@@ -232,6 +240,7 @@ export const useStore = create<AppStore>()(
       setConn: (partial) => set((s) => ({ conn: { ...s.conn, ...partial } })),
       setEndpoints: (endpoints) => set({ endpoints }),
       setScanning: (scanning) => set({ scanning }),
+      setNodeTesting: (nodeTesting) => set({ nodeTesting }),
       setCancelling: (cancelling) => set({ cancelling }),
       setNodeQuery: (nodeQuery) => set({ nodeQuery }),
       setSavedQuery: (savedQuery) => set({ savedQuery }),
@@ -364,6 +373,8 @@ export const useStore = create<AppStore>()(
         subscriptions: s.subscriptions,
         subNodes: s.subNodes,
         savedNodes: s.savedNodes,
+        // 延迟/速度结果要落盘：首页下拉按延迟排序，重启后丢掉就白测了
+        nodeStats: s.nodeStats,
         rules: s.rules,
       }),
     },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Layers, Link2, RefreshCw, Trash2, Check, AlertCircle, ArrowRight, Zap, Timer, Square, Gauge } from 'lucide-react'
+import { Layers, Link2, RefreshCw, Trash2, Check, AlertCircle, ArrowRight, Zap, Timer, Square, Gauge, Star } from 'lucide-react'
 import { useStore, newId } from '../store'
 import { tr } from '../i18n'
 import { Card, Segment, Toggle, FieldRow, formatRate } from '../components/ui'
@@ -9,7 +9,7 @@ import type { Subscription, SubNode, NodeStat } from '../types'
 
 export function ModesPage() {
   const store = useStore()
-  const { settings: s, subscriptions, subNodes, nodeStats } = store
+  const { settings: s, subscriptions, subNodes, savedNodes, nodeStats } = store
   const t = (k: string, v?: Record<string, string | number>) => tr(k, s.lang, v)
   const [source, setSource] = useState('')
   const [busy, setBusy] = useState(false)
@@ -156,6 +156,37 @@ export function ModesPage() {
 
   const countFor = (id: string) => subNodes.filter((n) => n.subId === id).length
 
+  /**
+   * 「config → 收藏 id」索引：收藏以 config 去重（同一节点名/地址可能重复），
+   * 所以判断是否已收藏不能按节点 id。
+   */
+  const savedByConfig = useMemo(
+    () => new Map(savedNodes.map((n) => [n.config, n.id])),
+    [savedNodes],
+  )
+
+  /** 行内收藏按钮：已收藏则取消，未收藏则连同当前延迟/速度一起存下来 */
+  const toggleSaved = (node: SubNode) => {
+    const hit = savedByConfig.get(node.config)
+    if (hit) {
+      store.removeSaved([hit])
+      setTestMsg({ ok: true, text: t('savedRemoveDone') })
+      store.log('INFO', `saved node removed: ${node.name}`)
+      return
+    }
+    const st = nodeStats[node.id]
+    // 顺手把当前测试结果带进收藏，收藏页打开就有延迟/速度可看
+    const added = store.saveNodes([{
+      ...node,
+      source: t('savedFromSub'),
+      savedAt: Date.now(),
+      delay: st?.delay,
+      speed: st?.speed,
+    }], t('savedFromSub'))
+    setTestMsg({ ok: added > 0, text: added > 0 ? t('savedAddDone') : t('savedDup') })
+    if (added > 0) store.log('INFO', `saved node added: ${node.name}`)
+  }
+
   return (
     <div className="page-wrap fade-in stack">
       <Card title={<><Layers size={16} />{t('connMode')}</>}>
@@ -286,6 +317,7 @@ export function ModesPage() {
               const delay = st?.delay ?? -1
               const speed = st?.speed ?? 0
               const failed = !!(st?.error && delay <= 0 && speed <= 0)
+              const isSaved = savedByConfig.has(node.config)
               return (
                 <div key={node.id} className={`node-row t ${selected ? 'selected' : ''}`}
                   onClick={() => { store.setSetting('frontNodeId', node.id); store.setSetting('connMode', 'subscription') }} tabIndex={0}
@@ -302,8 +334,19 @@ export function ModesPage() {
                   <span className={`cell node-stat ${speedClass(speed)}`}>
                     {speed > 0 ? formatRate(speed) : (failed ? '—' : '· · ·')}
                   </span>
-                  <span className="cell" style={{ textAlign: 'right', color: selected ? 'var(--success)' : 'var(--text-3)' }}>
-                    {selected ? <><Check size={14} /> {t('frontSelected')}</> : t('select')}
+                  <span className="cell node-row-actions">
+                    <button
+                      className={`icon-btn ${isSaved ? 'starred' : ''}`}
+                      title={isSaved ? t('savedInList') : t('savedAddOne')}
+                      aria-label={isSaved ? t('savedInList') : t('savedAddOne')}
+                      onClick={(ev) => { ev.stopPropagation(); toggleSaved(node) }}
+                      onKeyDown={(ev) => ev.stopPropagation()}
+                    >
+                      <Star size={14} fill={isSaved ? 'var(--brand)' : 'none'} />
+                    </button>
+                    <span style={{ color: selected ? 'var(--success)' : 'var(--text-3)' }}>
+                      {selected ? <><Check size={14} /> {t('frontSelected')}</> : t('select')}
+                    </span>
                   </span>
                 </div>
               )

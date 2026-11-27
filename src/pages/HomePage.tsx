@@ -11,10 +11,10 @@ import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling } = store
+  const { settings, conn, endpoints, scanning, nodeTesting, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
   const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
-  const { scan, connect, disconnect, cancel } = useEngine()
+  const { scan, probeSubNodes, connect, disconnect, cancel } = useEngine()
   const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
 
@@ -56,13 +56,22 @@ export function HomePage() {
   /**
    * 下拉的订阅组。选用的节点可能来自「收藏」（不在当前订阅列表里），
    * 若只列 subNodes，触发器会因为找不到选项而显示「未选择节点」。
+   *
+   * 顺序按实测延迟升序：测速（首页按钮 / 模式页）之后自动生效；
+   * 未测与测不通的视为最大值排在后面，且保持订阅原始顺序（sort 稳定）。
    */
-  const subOptions: FlagOption[] = subNodes.map((n) => ({
-    value: `sub:${n.id}`,
-    label: displayNodeName(n.name),
-    flag: codeFromNode(n.name, n.server),
-    hint: nodeStats[n.id]?.delay > 0 ? `${nodeStats[n.id].delay}ms` : '',
-  }))
+  const latencyOf = (id: string) => {
+    const d = nodeStats[id]?.delay ?? 0
+    return d > 0 ? d : Number.MAX_SAFE_INTEGER
+  }
+  const subOptions: FlagOption[] = [...subNodes]
+    .sort((a, b) => latencyOf(a.id) - latencyOf(b.id))
+    .map((n) => ({
+      value: `sub:${n.id}`,
+      label: displayNodeName(n.name),
+      flag: codeFromNode(n.name, n.server),
+      hint: nodeStats[n.id]?.delay > 0 ? `${nodeStats[n.id].delay}ms` : '',
+    }))
   if (subNode && !subNodes.some((n) => n.id === subNode.id)) {
     subOptions.unshift({
       value: `sub:${subNode.id}`,
@@ -84,6 +93,19 @@ export function HomePage() {
       return
     }
     conn.connected ? disconnect() : connect()
+  }
+
+  /**
+   * 同一个按钮两种语义：
+   * - 订阅模式（且有订阅节点）：给订阅节点测延迟，结果用来排序下拉
+   * - WARP 模式：探测 WARP 候选端点（原行为）
+   * WARP 端点扫描对订阅模式没有意义，订阅模式下测节点才是用户想要的。
+   */
+  const probeSub = settings.connMode === 'subscription' && subNodes.length > 0
+  const probeBusy = probeSub ? nodeTesting : scanning
+  const runProbe = () => {
+    if (probeBusy) return
+    void (probeSub ? probeSubNodes() : scan())
   }
 
   // 观测记录：按 host:port 归并（旧版本键里带协议前缀），命中次数多的排前面，最多展示 5 条
@@ -196,8 +218,13 @@ export function HomePage() {
               <span className={`badge ${settings.connMode === 'subscription' ? 'badge-blue' : 'badge-gray'}`}>
                 {t(settings.connMode === 'subscription' ? 'modeSubscription' : 'modeWarp')}
               </span>
-              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={scan} disabled={scanning}>
-                <RefreshCw size={13} className={scanning ? 'spin' : ''} />{t(scanning ? 'scanning' : 'scan')}
+              <button
+                className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }}
+                onClick={runProbe} disabled={probeBusy}
+                title={probeSub ? t('probeSubHint') : undefined}
+              >
+                <RefreshCw size={13} className={probeBusy ? 'spin' : ''} />
+                {t(probeBusy ? (probeSub ? 'testing' : 'scanning') : (probeSub ? 'probeSubNodes' : 'scan'))}
               </button>
             </div>
             <FlagSelect

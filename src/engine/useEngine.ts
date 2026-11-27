@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react'
 import { useStore, useLive, flushPersist } from '../store'
 import { createAdapter } from './adapters'
 import { initDesktopBridge } from '../desktop'
-import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, Settings } from '../types'
+import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, Settings, NodeStat } from '../types'
 import { tr } from '../i18n'
 
 // ============ 全局单例引擎 ============
@@ -420,6 +420,54 @@ export function useEngine() {
     }
   }, [])
 
+  /**
+   * 订阅节点延迟测试。
+   *
+   * 走的是独立的测速核心（node_test_start / node_test_delay），
+   * 它的监听端口与 API 端口都是现分配的，和正在连接的核心互不干扰，
+   * 所以「已连接状态下点扫描」也不会把现有隧道踢掉。
+   * 结果写进 nodeStats，首页下拉据此把订阅节点按延迟升序排列。
+   * 返回测通数量。
+   */
+  const probeSubNodes = useCallback(async (): Promise<number> => {
+    const s = useStore.getState()
+    const desk = (window as any).AnTunDesktop
+    if (!desk?.isDesktop) {
+      s.log('WARN', 'node probe skipped: 需要桌面客户端')
+      return 0
+    }
+    if (s.nodeTesting) return 0
+    if (!s.subNodes.length) {
+      s.log('WARN', 'node probe skipped: 没有订阅节点')
+      return 0
+    }
+    s.setNodeTesting(true)
+    s.log('INFO', `probe subscription nodes: ${s.subNodes.length}`)
+    s.addHistory(`node probe: ${s.subNodes.length} nodes`)
+    try {
+      const start = await desk.nodeTestStart(s.subNodes)
+      if (start?.skipped?.length) {
+        s.mergeNodeStats(start.skipped.map((id: string) => ({
+          id, delay: -1, speed: 0, bytes: 0, error: tr('nodeCfgRejected', s.settings.lang),
+        })))
+      }
+      const delays: NodeStat[] = await desk.nodeTestDelay()
+      useStore.getState().mergeNodeStats(delays || [])
+      const ok = (delays || []).filter((d) => d.delay > 0).length
+      const total = (delays || []).length
+      s.log('INFO', `node probe ok: ${ok}/${total} reachable`)
+      s.addHistory(`node probe ok: ${ok}/${total}`)
+      return ok
+    } catch (e: any) {
+      s.log('ERROR', `node probe failed: ${e?.message || e}`)
+      s.addHistory('node probe failed', false)
+      return 0
+    } finally {
+      try { await desk.nodeTestStop() } catch { /* 核心可能已退出 */ }
+      useStore.getState().setNodeTesting(false)
+    }
+  }, [])
+
   const connect = useCallback(async (optsOverride?: Partial<ConnectOptions>) => {
     resetTraffic()
     await engineConnect(optsOverride)
@@ -454,5 +502,5 @@ export function useEngine() {
     await engineCancel()
   }, [])
 
-  return { scan, connect, disconnect, cancel }
+  return { scan, probeSubNodes, connect, disconnect, cancel }
 }

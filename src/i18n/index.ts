@@ -62,6 +62,13 @@ const zh: Record<string, string> = {
   savedNoMatch: '没有匹配的收藏节点',
   savedNeedDesktop: '测速需要桌面端',
   savedFromSub: '订阅导入',
+  savedAddOne: '加入收藏',
+  savedInList: '已收藏，点击取消',
+  savedAddDone: '已加入收藏',
+  savedRemoveDone: '已从收藏移除',
+  savedDup: '该节点已在收藏中',
+  probeSubNodes: '测速节点',
+  probeSubHint: '给订阅节点测延迟，测完下拉按延迟从低到高排序',
   navModes: '模式',
 
   // 模式 / 订阅
@@ -409,6 +416,13 @@ const en: Record<string, string> = {
   savedNoMatch: 'No matching saved nodes',
   savedNeedDesktop: 'Speed test needs the desktop app',
   savedFromSub: 'From subscription',
+  savedAddOne: 'Add to saved',
+  savedInList: 'Saved — click to remove',
+  savedAddDone: 'Added to saved nodes',
+  savedRemoveDone: 'Removed from saved nodes',
+  savedDup: 'Already in saved nodes',
+  probeSubNodes: 'Test nodes',
+  probeSubHint: 'Measure subscription node latency; the dropdown then sorts fastest first',
   navModes: 'Modes',
 
   modesTitle: 'Modes',
