@@ -4,7 +4,7 @@ export type Lang = 'zh' | 'en'
 export type Theme = 'light' | 'dark' | 'system'
 export type Protocol = 'awg' | 'wg' | 'gool' | 'masque' | 'masque-h2' | 'masque-mm'
 export type CaptureMode = 'proxy' | 'tun'
-export type PageId = 'home' | 'modes' | 'nodes' | 'rules' | 'settings' | 'logs' | 'about'
+export type PageId = 'home' | 'modes' | 'nodes' | 'saved' | 'rules' | 'settings' | 'logs' | 'about'
 export type ConnMode = 'warp' | 'subscription'
 
 /** 订阅源 */
@@ -24,6 +24,28 @@ export interface SubNode {
   server: string
   port: number
   config: string
+}
+
+/**
+ * 收藏节点：完整保存分享链接（config），因此订阅刷新、订阅被删都还能用。
+ * id 是收藏项自己的，与订阅节点 id 解耦，避免订阅重拉后收藏失效。
+ */
+export interface SavedNode {
+  id: string
+  name: string
+  nodeType: string
+  server: string
+  port: number
+  /** 分享链接，真正建链靠它 */
+  config: string
+  /** 来源，例如订阅名或「手动添加」 */
+  source: string
+  note?: string
+  savedAt: number
+  /** 最近一次测试结果，仅作展示缓存（不参与建链） */
+  delay?: number
+  speed?: number
+  testedAt?: number
 }
 
 /** 节点测速结果 */
@@ -79,11 +101,9 @@ export interface Settings {
   subscriptionUrl: string
   frontNodeId: string
   proto: Protocol
-  innerProto: Protocol
   rescan: boolean
   psiphon: boolean
   psiphonRegion: string
-  warpInWarp: boolean
   autoRepair: boolean
   captureMode: CaptureMode
   mixedPort: number
@@ -169,7 +189,6 @@ export interface ConnectOptions {
   frontType?: string
   captureMode: CaptureMode
   psiphon: boolean
-  warpInWarp: boolean
   settings: Settings
 }
 

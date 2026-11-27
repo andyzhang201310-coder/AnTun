@@ -128,7 +128,7 @@ export function SettingsPage() {
     }
   }
 
-  const regionChainDisabled = s.warpInWarp || s.connMode === 'subscription'
+  const regionChainDisabled = s.connMode === 'subscription'
   const regionOptions = regions.some((r) => r.code === s.psiphonRegion)
     ? regions
     : [{ code: s.psiphonRegion, nameZh: s.psiphonRegion || t('regionAuto'), nameEn: s.psiphonRegion || 'Automatic', live: false }, ...regions]

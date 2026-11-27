@@ -369,7 +369,7 @@ pub fn is_running(state: &tauri::State<'_, CoreState>) -> bool {
 }
 
 /// 查找随安装包内置的资源文件（兼容 resources/ 子目录与根目录两种布局）
-fn bundled_resource(app: &AppHandle, name: &str) -> Option<PathBuf> {
+pub(crate) fn bundled_resource_path(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let base = app.path().resource_dir().ok()?;
     [base.join("resources").join(name), base.join(name)]
         .into_iter()
@@ -384,7 +384,7 @@ pub fn ensure_bundled_extras(app: &AppHandle) {
         if dest.exists() {
             continue;
         }
-        if let Some(src) = bundled_resource(app, name) {
+        if let Some(src) = bundled_resource_path(app, name) {
             let _ = std::fs::copy(src, dest);
         }
     }
@@ -399,7 +399,7 @@ pub(crate) fn download_core(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {}", e))?;
 
-    if let Some(src) = bundled_resource(app, "mihomo.exe") {
+    if let Some(src) = bundled_resource_path(app, "mihomo.exe") {
         std::fs::copy(src, &dest).map_err(|e| format!("复制内置核心: {}", e))?;
         return Ok(dest);
     }
@@ -598,6 +598,7 @@ fn render_config(
     ip_family: &str,
     sub_exit: &str,
     sub_via_warp: bool,
+    psiphon_socks_port: Option<u16>,
 ) -> String {
     let effective_mtu = if mtu > 0 { mtu } else { 1280 };
     let allow_lan_str = if allow_lan { "true" } else { "false" };
@@ -663,6 +664,18 @@ fn render_config(
         }
     }
 
+    // Psiphon 出口：最终出站指向它的本地 SOCKS。
+    // 此时 WARP/节点仍留在 proxies 里，但没有任何组引用它们，因此不会真的建链。
+    if let Some(sp) = psiphon_socks_port {
+        if !proxies.ends_with('\n') {
+            proxies.push('\n');
+        }
+        proxies.push_str(&format!(
+            "  - {{ name: PSIPHON, type: socks5, server: 127.0.0.1, port: {sp}, udp: false }}\n"
+        ));
+        outbound = "PSIPHON";
+    }
+
     format!(
         r#"# AnTun 自动生成的配置（请勿手动修改）· protocol={protocol}
 mixed-port: {port}
@@ -709,6 +722,8 @@ rules:
 #[tauri::command]
 pub fn core_stop(app: AppHandle, state: tauri::State<'_, CoreState>) -> Result<(), String> {
     stop_child(state.inner());
+    // Psiphon 出口和核心同生命周期：断开连接必须一并结束，否则它会继续占着端口和网络
+    crate::psiphon::stop(&app);
     let _ = restore_system_proxy(&app);
     Ok(())
 }
@@ -880,6 +895,10 @@ struct ConnectArgs {
     /// 只对 WireGuard 系（wg/awg/gool 外层）生效：MASQUE 端点由 Cloudflare 固定下发。
     endpoint_host: Option<String>,
     endpoint_port: Option<u16>,
+    /// Psiphon 出口：开则先拉起 Psiphon 客户端，最终出站改走它的本地 SOCKS
+    psiphon: bool,
+    /// Psiphon 出口地区（ISO alpha-2，空为自动）
+    psiphon_region: String,
 }
 
 /// 真正建立连接：下载核心 → 写配置 → 启动 → 通过代理探测出口
@@ -890,7 +909,7 @@ struct ConnectArgs {
 #[tauri::command]
 pub async fn core_connect(
     app: AppHandle,
-    state: tauri::State<'_, CoreState>,
+    _state: tauri::State<'_, CoreState>,
     cred: WarpCredential,
     protocol: String,
     port: u16,
@@ -907,6 +926,8 @@ pub async fn core_connect(
     sub_via_warp: Option<bool>,
     endpoint_host: Option<String>,
     endpoint_port: Option<u16>,
+    psiphon: Option<bool>,
+    psiphon_region: Option<String>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
     let src = crate::credential::source_of(&cred).to_string();
@@ -926,46 +947,72 @@ pub async fn core_connect(
         sub_via_warp: sub_via_warp.unwrap_or(false),
         endpoint_host: endpoint_host.filter(|h| !h.trim().is_empty()),
         endpoint_port: endpoint_port.filter(|p| *p > 0),
+        psiphon: psiphon.unwrap_or(false),
+        psiphon_region: psiphon_region.unwrap_or_default(),
     };
 
-    match attempt_connect(&app, state.inner(), &cred, &args) {
-        Ok(mut r) => {
-            r.credential_source = src;
-            Ok(r)
-        }
-        Err(first_err) => {
-            if src == "builtin" {
-                return Ok(CoreResult {
-                    error: first_err,
-                    credential_source: src,
-                    ..Default::default()
-                });
+    // 连接全过程是同步阻塞的（起 Psiphon 进程、等隧道、起核心、轮询出口），
+    // Psiphon 首次启动就要几十秒。直接在 async 命令体里跑会占住运行时线程、
+    // 期间界面与 WebView2 都拿不到响应，所以整段丢进阻塞线程池。
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = app.state::<CoreState>();
+        let state = st.inner();
+        match attempt_connect(&app, state, &cred, &args) {
+            Ok(mut r) => {
+                r.credential_source = src;
+                Ok(r)
             }
-            // 当前凭证建立不了隧道 → 回退内置共享凭证再试一次
-            let _ = app.emit(
-                "antun-credential",
-                serde_json::json!({
-                    "kind": "fallback",
-                    "source": "builtin",
-                    "ok": true,
-                    "error": first_err,
-                }),
-            );
-            match attempt_connect(&app, state.inner(), &builtin_credential(), &args) {
-                Ok(mut r) => {
-                    r.credential_source = "builtin".into();
-                    r.fallback = true;
-                    r.fallback_reason = first_err;
-                    Ok(r)
+            Err(first_err) => {
+                if src == "builtin" {
+                    return Ok(CoreResult {
+                        error: first_err,
+                        credential_source: src,
+                        ..Default::default()
+                    });
                 }
-                Err(second) => Ok(CoreResult {
-                    error: format!("{}；回退内置凭证仍失败：{}", first_err, second),
-                    credential_source: "builtin".into(),
-                    fallback: true,
-                    fallback_reason: first_err,
-                    ..Default::default()
-                }),
+                // 当前凭证建立不了隧道 → 回退内置共享凭证再试一次
+                let _ = app.emit(
+                    "antun-credential",
+                    serde_json::json!({
+                        "kind": "fallback",
+                        "source": "builtin",
+                        "ok": true,
+                        "error": first_err,
+                    }),
+                );
+                match attempt_connect(&app, state, &builtin_credential(), &args) {
+                    Ok(mut r) => {
+                        r.credential_source = "builtin".into();
+                        r.fallback = true;
+                        r.fallback_reason = first_err;
+                        Ok(r)
+                    }
+                    Err(second) => Ok(CoreResult {
+                        error: format!("{}；回退内置凭证仍失败：{}", first_err, second),
+                        credential_source: "builtin".into(),
+                        fallback: true,
+                        fallback_reason: first_err,
+                        ..Default::default()
+                    }),
+                }
             }
+        }
+    })
+    .await
+    .map_err(|e| format!("连接任务异常: {}", e))?
+}
+
+/// 失败时清理 Psiphon：连接链路上任何一步出错都不该留下一个占着端口的游离客户端。
+/// 成功连接时把 keep 置真，进程交还给 state，由 core_stop / 下次连接接管。
+struct PsiphonGuard<'a> {
+    app: &'a AppHandle,
+    keep: bool,
+}
+
+impl Drop for PsiphonGuard<'_> {
+    fn drop(&mut self) {
+        if !self.keep {
+            crate::psiphon::stop(self.app);
         }
     }
 }
@@ -993,6 +1040,25 @@ fn attempt_connect(
     stop_child(state);
     let _ = restore_system_proxy(app);
 
+    // 1.5 Psiphon 出口：先把它拉起来拿到本地 SOCKS 端口，再渲染配置。
+    // 首次启动要下载远程服务器列表（实测约 30 秒），所以用独立的长超时。
+    // 失败一律清理（guard），避免留下一个占着端口的孤儿进程。
+    let mut psi_guard = PsiphonGuard { app, keep: !a.psiphon };
+    let psiphon_port = if a.psiphon {
+        psi_guard.keep = false;
+        match crate::psiphon::start(
+            app,
+            &a.psiphon_region,
+            Duration::from_secs(crate::psiphon::DEFAULT_TIMEOUT_SECS),
+        ) {
+            Ok(p) => Some(p),
+            Err(e) => return Err(format!("Psiphon 出口启动失败：{}", e)),
+        }
+    } else {
+        crate::psiphon::stop(app);
+        None
+    };
+
     // 2. 确保核心存在
     let exe = download_core(app)?;
     ensure_bundled_extras(app);
@@ -1012,6 +1078,7 @@ fn attempt_connect(
         &a.ip_family,
         &a.sub_exit,
         a.sub_via_warp,
+        psiphon_port,
     );
     let cfg_path = config_path(app)?;
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写配置: {}", e))?;
@@ -1076,6 +1143,8 @@ fn attempt_connect(
                     let _ = restore_system_proxy(app);
                     return Err(format!("设置系统代理失败：{}", e));
                 }
+                // 连接成功：Psiphon 进程交给 state 持有，随 core_stop 一起结束
+                psi_guard.keep = true;
                 return Ok(info);
             }
             Err(e) => last_err = e,
@@ -1285,6 +1354,7 @@ mod tests {
             "v4",
             sub_exit,
             sub_via_warp,
+            None,
         )
     }
 

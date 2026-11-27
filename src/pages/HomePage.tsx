@@ -4,13 +4,14 @@ import { useStore, useLive } from '../store'
 import type { ColoRecord } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
-import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
+import { Card, Toggle, ProtocolSelect, FlagSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
+import type { FlagOption } from '../components/ui'
 import { Flag } from '../components/Flag'
 import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, pinnedId, subNodes, nodeStats, coloLog } = store
+  const { settings, conn, endpoints, scanning, pinnedId, subNodes, savedNodes, nodeStats, coloLog } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
   const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
   const { scan, connect, disconnect } = useEngine()
@@ -26,8 +27,20 @@ export function HomePage() {
   }, [])
 
   const pinned = endpoints.find((e) => e.id === pinnedId)
-  const subNode = settings.connMode === 'subscription' ? subNodes.find((n) => n.id === settings.frontNodeId) : undefined
-  const subStat = subNode ? nodeStats[subNode.id] : undefined
+  // 选中的前置节点：先找当前订阅，再找收藏（收藏项与订阅解耦，刷新订阅不会让它失效）
+  const subNode = settings.connMode === 'subscription'
+    ? (subNodes.find((n) => n.id === settings.frontNodeId) ?? savedNodes.find((n) => n.id === settings.frontNodeId))
+    : undefined
+  // 收藏节点不在 nodeStats 里，用收藏时缓存的结果兜底，避免首页延迟一直显示空
+  const subStat = subNode
+    ? (nodeStats[subNode.id] ?? {
+      id: subNode.id,
+      delay: ('delay' in subNode ? subNode.delay : undefined) ?? -1,
+      speed: ('speed' in subNode ? subNode.speed : undefined) ?? 0,
+      bytes: 0,
+      error: '',
+    })
+    : undefined
   /**
    * 订阅模式「节点出口」：隧道完全由订阅节点自己的协议承担（例如 VLESS），
    * 此时 settings.proto 只留在配置里、不参与建链，协议下拉框必须降级为只读展示，
@@ -40,6 +53,28 @@ export function HomePage() {
   const nodeValue = settings.connMode === 'subscription'
     ? (subNode ? `sub:${subNode.id}` : 'sub:none')
     : `warp:${pinnedId ?? 'auto'}`
+  /**
+   * 下拉的订阅组。选用的节点可能来自「收藏」（不在当前订阅列表里），
+   * 若只列 subNodes，触发器会因为找不到选项而显示「未选择节点」。
+   */
+  const subOptions: FlagOption[] = subNodes.map((n) => ({
+    value: `sub:${n.id}`,
+    label: displayNodeName(n.name),
+    flag: codeFromNode(n.name, n.server),
+    hint: nodeStats[n.id]?.delay > 0 ? `${nodeStats[n.id].delay}ms` : '',
+  }))
+  if (subNode && !subNodes.some((n) => n.id === subNode.id)) {
+    subOptions.unshift({
+      value: `sub:${subNode.id}`,
+      label: displayNodeName(subNode.name),
+      flag: codeFromNode(subNode.name, subNode.server),
+      hint: `${subStat && subStat.delay > 0 ? `${subStat.delay}ms · ` : ''}${t('navSaved')}`,
+    })
+  }
+  if (!subOptions.length) {
+    subOptions.push({ value: 'sub:none', label: t('noSubscription'), disabled: true })
+  }
+
   const latestLatency = latencyPoints.length ? latencyPoints[latencyPoints.length - 1].ms : conn.latency
   const ringDeg = conn.connecting ? 220 : conn.connected ? 360 : 0
   const toggleConnect = () => {
@@ -131,7 +166,9 @@ export function HomePage() {
               <div className="pwr"><Power size={34} strokeWidth={2.3} /></div>
               <div style={{ marginTop: 14, fontSize: 15, fontWeight: 800 }}>{t(conn.connected ? 'connected' : conn.connecting ? 'connecting' : 'connect')}</div>
               <div className="muted mono" style={{ fontSize: 11, marginTop: 4 }}>
-                {conn.startedAt && conn.connected ? t('sessionClock') + ' ' + formatDuration(Date.now() - conn.startedAt) : t('appTagline')}
+                {conn.startedAt && conn.connected
+                  ? t('sessionClock') + ' ' + formatDuration(Date.now() - conn.startedAt)
+                  : conn.connecting && settings.psiphon ? t('psiphonStarting') : t('appTagline')}
               </div>
             </div>
           </div>
@@ -148,35 +185,35 @@ export function HomePage() {
                 <RefreshCw size={13} className={scanning ? 'spin' : ''} />{t(scanning ? 'scanning' : 'scan')}
               </button>
             </div>
-            <select
-              className="select"
-              style={{ width: '100%' }}
+            <FlagSelect
+              lang={settings.lang}
               value={nodeValue}
               disabled={switching}
-              onChange={(e) => void pickNode(e.target.value)}
-            >
-              <optgroup label={t('modeWarp')}>
-                <option value="warp:auto">{t('autoSelect')}</option>
-                {endpoints.map((e) => (
-                  <option key={e.id} value={`warp:${e.id}`}>
-                    {e.host}:{e.port} · {e.latency > 0 ? `${e.latency}ms` : t('probeUntested')}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label={t('subscriptionNodes')}>
-                {settings.connMode === 'subscription' && !subNode && (
-                  <option value="sub:none" disabled>{t('noNodeSelected')}</option>
-                )}
-                {subNodes.length ? subNodes.map((n) => {
-                  const st = nodeStats[n.id]
-                  return (
-                    <option key={n.id} value={`sub:${n.id}`}>
-                      {n.name}{st && st.delay > 0 ? ` · ${st.delay}ms` : ''}
-                    </option>
-                  )
-                }) : <option value="" disabled>{t('noSubscription')}</option>}
-              </optgroup>
-            </select>
+              placeholder={t('noNodeSelected')}
+              empty={t('noSubscription')}
+              onChange={(v) => void pickNode(v)}
+              groups={[
+                {
+                  label: t('modeWarp'),
+                  options: [
+                    { value: 'warp:auto', label: t('autoSelect'), globe: false },
+                    ...endpoints.map((e) => ({
+                      value: `warp:${e.id}`,
+                      label: `${e.host}:${e.port}`,
+                      globe: false,
+                      hint: e.latency > 0 ? `${e.latency}ms` : t('probeUntested'),
+                    })),
+                  ],
+                },
+                {
+                  label: t('subscriptionNodes'),
+                  options: subOptions,
+                },
+              ]}
+            />
+            {settings.connMode === 'subscription' && !subNode && subNodes.length > 0 && (
+              <div className="muted" style={{ fontSize: 11.5, color: 'var(--warn)' }}>{t('noNodeSelected')}</div>
+            )}
             <div className="muted home-node-pick-hint">
               {switching ? t('switching')
                 : conn.connected ? t('switchReconnect')
@@ -228,15 +265,17 @@ export function HomePage() {
                 control={<Toggle checked={settings.captureMode === 'tun'} onChange={(v) => store.setSetting('captureMode', v ? 'tun' : 'proxy')} />} />
               <FieldRow title={t('rescan')} desc={t('rescanDesc')}
                 control={<Toggle checked={settings.rescan} onChange={(v) => store.setSetting('rescan', v)} />} />
-              <FieldRow title={t('warpInWarp')} desc={t('warpInWarpDesc')}
-                control={<Toggle checked={settings.warpInWarp} onChange={(v) => store.setSetting('warpInWarp', v)} />} />
-              {settings.warpInWarp && (
-                <FieldRow title={t('innerProto')} control={
-                  <ProtocolSelect compact value={settings.innerProto} onChange={(p) => store.setSetting('innerProto', p)} availableLabel={t('available')} />
-                } />
-              )}
-              <FieldRow title={t('psiphon')} desc={t('psiphonDesc')}
-                control={<Toggle checked={settings.psiphon} onChange={(v) => store.setSetting('psiphon', v)} />} />
+              <FieldRow
+                title={t('psiphon')}
+                desc={settings.connMode === 'subscription' ? t('psiphonSubOnly') : t('psiphonDesc')}
+                control={
+                  <Toggle
+                    checked={settings.psiphon}
+                    disabled={settings.connMode === 'subscription'}
+                    onChange={(v) => store.setSetting('psiphon', v)}
+                  />
+                }
+              />
             </Card>
           </div>
         </div>

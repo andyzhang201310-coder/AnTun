@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode, CSSProperties } from 'react'
 import { ChevronDown, Languages, Lock, Moon, ShieldCheck, Sun } from 'lucide-react'
 import type { Protocol, Theme, Lang } from '../types'
+import { Flag } from './Flag'
 
 export function Card({ title, sub, icon, children, className = '', style }: {
   title?: ReactNode; sub?: string; icon?: ReactNode; children: ReactNode; className?: string; style?: CSSProperties
@@ -181,6 +182,108 @@ export function ProtocolSelect({ value, onChange, label, availableLabel = '可�
               <span className="proto-name">{PROTOCOL_LABELS[p]}</span>
               <span className="proto-available"><span className="dot" />{availableLabel}</span>
             </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 自绘下拉的一个选项（原生 <option> 放不了国旗图片） */
+export interface FlagOption {
+  value: string
+  label: string
+  /** 国家/地区码；与 globe 搭配决定左侧图标 */
+  flag?: string
+  /** flag 为空时是否显示中性地球（WARP 端点这类与国家无关的项传 false） */
+  globe?: boolean
+  /** 右侧小字，例如延迟 */
+  hint?: string
+  disabled?: boolean
+}
+
+export interface FlagOptionGroup {
+  label: string
+  options: FlagOption[]
+}
+
+/**
+ * 带国旗的下拉选择器。
+ * 原生 <select> 的 <option> 只能放纯文本，而 Windows 上国旗 emoji 会退化成两个字母，
+ * 所以这里用 div 自绘，才能把 /flags/*.svg 放进选项里。
+ */
+export function FlagSelect({ groups, value, onChange, disabled, empty, lang = 'zh', placeholder }: {
+  groups: FlagOptionGroup[]
+  value: string
+  onChange: (v: string) => void
+  disabled?: boolean
+  /** 没有任何选项时显示的占位行 */
+  empty?: string
+  lang?: 'zh' | 'en'
+  placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const flat = groups.flatMap((g) => g.options)
+  const current = flat.find((o) => o.value === value)
+  const total = flat.length
+
+  return (
+    <div ref={rootRef} className={`flag-select ${disabled ? 'disabled' : ''}`}>
+      <button
+        type="button"
+        className={`flag-trigger ${open ? 'open' : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => { if (!disabled) setOpen((v) => !v) }}
+      >
+        {current
+          ? <Flag code={current.flag} globe={current.globe !== false} lang={lang} size={17} eager />
+          : null}
+        <span className="flag-value">{current?.label ?? placeholder ?? empty ?? '—'}</span>
+        {current?.hint && <span className="flag-trigger-hint mono">{current.hint}</span>}
+        <ChevronDown size={16} className={`proto-chevron ${open ? 'open' : ''}`} />
+      </button>
+      {open && !disabled && (
+        <div className="flag-menu" role="listbox">
+          {total === 0 && empty && <div className="flag-empty">{empty}</div>}
+          {groups.map((g) => (
+            <div key={g.label} className="flag-group">
+              <div className="flag-group-label">{g.label}</div>
+              {g.options.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  aria-selected={o.value === value}
+                  disabled={o.disabled}
+                  className={`flag-option ${o.value === value ? 'selected' : ''}`}
+                  onClick={() => { onChange(o.value); setOpen(false) }}
+                >
+                  <Flag code={o.flag} globe={o.globe !== false} lang={lang} size={15} eager />
+                  <span className="flag-option-label">{o.label}</span>
+                  {o.hint && <span className="flag-option-hint mono">{o.hint}</span>}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}

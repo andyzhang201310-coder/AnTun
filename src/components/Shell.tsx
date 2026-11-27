@@ -1,4 +1,4 @@
-import { Home, Layers, Server, ShieldCheck, Settings, ScrollText, Info, Wifi, WifiOff, Monitor, Smartphone, Tv, Globe } from 'lucide-react'
+import { Home, Layers, Server, Star, ShieldCheck, Settings, ScrollText, Info, Wifi, WifiOff, Monitor, Smartphone, Tv, Globe } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { PageId, Platform } from '../types'
 import { useStore } from '../store'
@@ -9,6 +9,7 @@ const NAV: { id: PageId; key: string; icon: typeof Home }[] = [
   { id: 'home', key: 'navHome', icon: Home },
   { id: 'modes', key: 'navModes', icon: Layers },
   { id: 'nodes', key: 'navNodes', icon: Server },
+  { id: 'saved', key: 'navSaved', icon: Star },
   { id: 'rules', key: 'navRules', icon: ShieldCheck },
   { id: 'settings', key: 'navSettings', icon: Settings },
   { id: 'logs', key: 'navLogs', icon: ScrollText },

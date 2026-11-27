@@ -79,8 +79,10 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
   try {
     const adapter = ensureAdapter()
     const pinned = s.endpoints.find((e) => e.id === s.pinnedId) || null
+    // 收藏节点也能作为前置：订阅刷新后 subNodes 会整体替换，收藏项必须独立兜底
     const frontNode = s.settings.connMode === 'subscription'
-      ? s.subNodes.find((n) => n.id === s.settings.frontNodeId)
+      ? (s.subNodes.find((n) => n.id === s.settings.frontNodeId)
+        ?? s.savedNodes.find((n) => n.id === s.settings.frontNodeId))
       : undefined
     if (s.settings.connMode === 'subscription' && !frontNode) {
       throw new Error('订阅模式尚未选择前置节点：请到「模式」页导入订阅并选一个节点')
@@ -106,8 +108,7 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
         frontConfig: frontNode?.config,
         frontType: frontNode?.nodeType,
         captureMode: s.settings.captureMode,
-        psiphon: s.settings.psiphon,
-        warpInWarp: s.settings.warpInWarp,
+        psiphon: s.settings.psiphon && s.settings.connMode === 'warp',
         settings: { ...s.settings, timeoutSec },
         ...optsOverride,
       }

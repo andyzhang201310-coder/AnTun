@@ -166,6 +166,8 @@ export class DesktopAdapter implements EngineAdapter {
         ipFamily: opts.settings.ipFamily,
         subExit: opts.settings.subExit ?? 'warp',
         subViaWarp: opts.settings.subViaWarp ?? false,
+        psiphon: opts.psiphon ?? false,
+        psiphonRegion: opts.settings.psiphonRegion ?? '',
       },
       picked,
     ) as CoreResult
@@ -211,6 +213,8 @@ export class DesktopAdapter implements EngineAdapter {
       downRate: 0,
       startedAt: Date.now(),
       session: (() => {
+        // Psiphon 作为最终出口时，WARP / 节点都不参与，标签必须如实反映
+        if (opts.psiphon) return 'Psiphon · 出口'
         if (!opts.frontConfig) return `${opts.protocol.toUpperCase()} · WARP`
         const type = (opts.frontType || 'NODE').toUpperCase()
         // 节点直接出口时 WARP 不参与（除非开启经 WARP 承载），会话标签不能写协议名

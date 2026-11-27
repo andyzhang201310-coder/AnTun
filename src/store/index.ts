@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import type { StateStorage } from 'zustand/middleware'
 import type {
   Settings, ConnState, Endpoint, Rule, LogEntry, HistoryStep,
-  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat,
+  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat, SavedNode,
 } from '../types'
 
 const DEFAULT_SETTINGS: Settings = {
@@ -13,11 +13,9 @@ const DEFAULT_SETTINGS: Settings = {
   subscriptionUrl: '',
   frontNodeId: '',
   proto: 'awg',
-  innerProto: 'wg',
   rescan: false,
   psiphon: false,
   psiphonRegion: '',
-  warpInWarp: false,
   autoRepair: true,
   captureMode: 'proxy',
   mixedPort: 7890,
@@ -103,6 +101,8 @@ interface AppStore {
   coloLog: Record<string, ColoRecord>
   subscriptions: Subscription[]
   subNodes: SubNode[]
+  /** 收藏节点：存完整 config，与订阅解耦 */
+  savedNodes: SavedNode[]
   nodeStats: Record<string, NodeStat>
   // 运行时
   conn: ConnState
@@ -113,6 +113,8 @@ interface AppStore {
    * 但不落盘 —— 否则下次开机打开节点页，列表是被过滤过的，容易以为端点没了。
    */
   nodeQuery: string
+  /** 收藏页搜索词：同 nodeQuery，切页保留、重启清空 */
+  savedQuery: string
   rules: Rule[]
   logs: LogEntry[]
   history: HistoryStep[]
@@ -127,6 +129,7 @@ interface AppStore {
   setEndpoints: (e: Endpoint[]) => void
   setScanning: (b: boolean) => void
   setNodeQuery: (q: string) => void
+  setSavedQuery: (q: string) => void
   pinEndpoint: (id: string | null) => void
   toggleCountry: (c: string) => void
   recordColo: (r: Omit<ColoRecord, 'ts' | 'hits'>) => void
@@ -134,6 +137,10 @@ interface AppStore {
   addSubscription: (s: Subscription) => void
   removeSubscription: (id: string) => void
   setSubNodes: (nodes: SubNode[]) => void
+  /** 收藏节点；按 config 去重，返回实际新增条数 */
+  saveNodes: (nodes: (SubNode | SavedNode)[], source?: string) => number
+  removeSaved: (ids: string[]) => void
+  updateSavedStats: (stats: NodeStat[]) => void
   mergeNodeStats: (stats: NodeStat[]) => void
   clearNodeStats: () => void
   addRule: (r: Omit<Rule, 'id'>) => void
@@ -198,11 +205,13 @@ export const useStore = create<AppStore>()(
       coloLog: {},
       subscriptions: [],
       subNodes: [],
+      savedNodes: [],
       nodeStats: {},
       conn: DEFAULT_CONN,
       endpoints: [],
       scanning: false,
       nodeQuery: '',
+      savedQuery: '',
       rules: DEFAULT_RULES,
       logs: [],
       history: [],
@@ -217,6 +226,7 @@ export const useStore = create<AppStore>()(
       setEndpoints: (endpoints) => set({ endpoints }),
       setScanning: (scanning) => set({ scanning }),
       setNodeQuery: (nodeQuery) => set({ nodeQuery }),
+      setSavedQuery: (savedQuery) => set({ savedQuery }),
       pinEndpoint: (pinnedId) => set({ pinnedId }),
       toggleCountry: (c) => set((s) => ({
         allowedCountries: s.allowedCountries.includes(c)
@@ -250,6 +260,51 @@ export const useStore = create<AppStore>()(
         subNodes: s.subNodes.filter((n) => n.subId !== id && n.subId !== s.subscriptions.find((x) => x.id === id)?.url),
       })),
       setSubNodes: (subNodes) => set({ subNodes }),
+      saveNodes: (items, source = '') => {
+        let added = 0
+        set((s) => {
+          const seen = new Set(s.savedNodes.map((n) => n.config))
+          const next = [...s.savedNodes]
+          for (const it of items) {
+            const cfg = (it as SubNode).config
+            if (!cfg || seen.has(cfg)) continue
+            seen.add(cfg)
+            added++
+            next.push({
+              id: newId(),
+              name: it.name,
+              nodeType: it.nodeType,
+              server: it.server,
+              port: it.port,
+              config: cfg,
+              source: source || ('source' in it ? String((it as SavedNode).source ?? '') : ''),
+              note: 'note' in it ? (it as SavedNode).note : undefined,
+              savedAt: Date.now(),
+              delay: 'delay' in it ? (it as SavedNode).delay : undefined,
+              speed: 'speed' in it ? (it as SavedNode).speed : undefined,
+            })
+          }
+          return added ? { savedNodes: next } : {}
+        })
+        return added
+      },
+      removeSaved: (ids) => set((s) => ({ savedNodes: s.savedNodes.filter((n) => !ids.includes(n.id)) })),
+      updateSavedStats: (stats) => set((s) => {
+        const map = new Map(stats.map((st) => [st.id, st]))
+        if (!map.size) return {}
+        return {
+          savedNodes: s.savedNodes.map((n) => {
+            const st = map.get(n.id)
+            if (!st) return n
+            return {
+              ...n,
+              delay: st.delay > 0 ? st.delay : n.delay,
+              speed: st.speed > 0 ? st.speed : n.speed,
+              testedAt: Date.now(),
+            }
+          }),
+        }
+      }),
       mergeNodeStats: (stats) => set((s) => {
         const next = { ...s.nodeStats }
         for (const st of stats) {
@@ -300,6 +355,7 @@ export const useStore = create<AppStore>()(
         coloLog: s.coloLog,
         subscriptions: s.subscriptions,
         subNodes: s.subNodes,
+        savedNodes: s.savedNodes,
         rules: s.rules,
       }),
     },

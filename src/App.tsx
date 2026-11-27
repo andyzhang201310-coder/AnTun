@@ -5,6 +5,7 @@ import { BrandMark } from './components/BrandMark'
 import { HomePage } from './pages/HomePage'
 import { ModesPage } from './pages/ModesPage'
 import { NodesPage } from './pages/NodesPage'
+import { SavedPage } from './pages/SavedPage'
 import { RulesPage } from './pages/RulesPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LogsPage } from './pages/LogsPage'
@@ -17,6 +18,7 @@ const PAGE_META: Record<PageId, { key: string; sub: string }> = {
   home: { key: 'homeTitle', sub: 'homeSub' },
   modes: { key: 'modesTitle', sub: 'modesSub' },
   nodes: { key: 'nodesTitle', sub: 'nodesSub' },
+  saved: { key: 'savedTitle', sub: 'savedSub' },
   rules: { key: 'rulesTitle', sub: 'rulesSub' },
   settings: { key: 'settingsTitle', sub: 'settingsSub' },
   logs: { key: 'logsTitle', sub: 'logsSub' },
@@ -92,6 +94,7 @@ export default function App() {
           {page === 'home' && <HomePage />}
           {page === 'modes' && <ModesPage />}
           {page === 'nodes' && <NodesPage />}
+          {page === 'saved' && <SavedPage />}
           {page === 'rules' && <RulesPage />}
           {page === 'settings' && <SettingsPage />}
           {page === 'logs' && <LogsPage />}

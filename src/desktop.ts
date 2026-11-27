@@ -125,6 +125,10 @@ export interface NetOptions {
   ipFamily: 'v4' | 'v6' | 'dual'
   subExit: 'warp' | 'node'
   subViaWarp: boolean
+  /** Psiphon 作为最终出口（替代 WARP，基础协议不参与） */
+  psiphon?: boolean
+  /** Psiphon 出口地区，空为自动 */
+  psiphonRegion?: string
 }
 
 export interface DiagItem {
@@ -229,6 +233,8 @@ export function initDesktopBridge() {
         ipFamily: net?.ipFamily ?? 'v4',
         subExit: net?.subExit ?? 'warp',
         subViaWarp: net?.subViaWarp ?? false,
+        psiphon: net?.psiphon ?? false,
+        psiphonRegion: net?.psiphonRegion ?? '',
       }),
     coreStop: () => invoke<void>('core_stop'),
     coreStatus: () => invoke<boolean>('core_status'),

@@ -101,6 +101,7 @@ pub fn run() {
         .manage(TrayState(Mutex::new(None)))
         .manage(core::CoreState::default())
         .manage(node_test::NodeTestState::default())
+        .manage(psiphon::PsiphonState::default())
         .invoke_handler(tauri::generate_handler![
             set_autostart,
             get_autostart,
@@ -122,6 +123,8 @@ pub fn run() {
             core_update::core_update,
             psiphon::psiphon_regions,
             psiphon::set_psiphon_region,
+            psiphon::psiphon_status,
+            psiphon::psiphon_stop,
             node_test::node_test_start,
             node_test::node_test_delay,
             node_test::node_test_speed,
