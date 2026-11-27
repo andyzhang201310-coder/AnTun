@@ -211,6 +211,54 @@ export function LatencyChart({ points, color = 'var(--brand)' }: {
   )
 }
 
+/**
+ * 上下行速率波形：两条曲线共用一个纵轴刻度，面积填充在下方。
+ * 纵轴下限固定为 8 KB/s，避免空载时的几十字节抖动把曲线放大成"满屏尖峰"。
+ */
+export function RateChart({ points, upColor = 'var(--warn)', downColor = 'var(--brand)', height = 132 }: {
+  points: { t: number; up: number; down: number }[]
+  upColor?: string; downColor?: string; height?: number
+}) {
+  const w = 600, h = height, pad = 10
+  if (points.length < 2) {
+    return (
+      <div className="muted" style={{ fontSize: 12, height: h, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        —
+      </div>
+    )
+  }
+  const peak = Math.max(...points.map((p) => Math.max(p.up, p.down)), 8 * 1024)
+  const max = peak * 1.15
+  const xAt = (i: number) => pad + (i / (points.length - 1)) * (w - pad * 2)
+  const yAt = (v: number) => pad + (1 - Math.max(0, v) / max) * (h - pad * 2)
+  const line = (key: 'up' | 'down') =>
+    points.map((p, i) => `${xAt(i).toFixed(1)},${yAt(p[key]).toFixed(1)}`).join(' ')
+  const areaOf = (key: 'up' | 'down') => `${pad},${h - pad} ${line(key)} ${w - pad},${h - pad}`
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" role="img"
+      aria-label={`rate chart, latest up ${points[points.length - 1].up} B/s down ${points[points.length - 1].down} B/s`}>
+      <defs>
+        <linearGradient id="rate-grad-down" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={downColor} stopOpacity="0.3" />
+          <stop offset="1" stopColor={downColor} stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="rate-grad-up" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={upColor} stopOpacity="0.22" />
+          <stop offset="1" stopColor={upColor} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {[0.25, 0.5, 0.75].map((r) => (
+        <line key={r} x1={pad} x2={w - pad} y1={pad + r * (h - pad * 2)} y2={pad + r * (h - pad * 2)}
+          stroke="var(--border)" strokeDasharray="3 5" />
+      ))}
+      <polygon points={areaOf('down')} fill="url(#rate-grad-down)" />
+      <polygon points={areaOf('up')} fill="url(#rate-grad-up)" />
+      <polyline points={line('up')} fill="none" stroke={upColor} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" opacity="0.9" />
+      <polyline points={line('down')} fill="none" stroke={downColor} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function ThemeLangControls({ theme, lang, onTheme, onLang, t }: {
   theme: Theme; lang: Lang; onTheme: (t: Theme) => void; onLang: (l: Lang) => void;
   t: (k: string) => string

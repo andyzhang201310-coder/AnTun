@@ -113,6 +113,18 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
       try {
         const state = await adapter.connect(opts)
         useStore.getState().setConn({ ...state, connecting: false, upRate: 0, downRate: 0 })
+        // 记下「这个端点实际落到了哪个机房」：anycast 出口无法指定，
+        // 唯一能手动干预的办法就是换端点，所以要把实测结果沉淀下来。
+        if (state.endpoint && (state.country || state.colo)) {
+          useStore.getState().recordColo({
+            id: `${state.endpoint.host}:${state.endpoint.port}`,
+            host: state.endpoint.host,
+            port: state.endpoint.port,
+            country: state.country,
+            colo: state.colo,
+            city: state.city,
+          })
+        }
         useLive.getState().resetLive()
         ;(window as any)._antunSyncTray?.()
         adapter.probe((p) => useLive.getState().pushLatency(p))

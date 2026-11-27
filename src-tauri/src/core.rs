@@ -1114,11 +1114,13 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
     let mut ip = String::new();
     let mut loc = String::new();
     let mut warp = String::new();
+    let mut colo = String::new();
     let mut elapsed_ms = 0u32;
     for line in trace_text.lines() {
         if let Some(v) = line.strip_prefix("ip=") { ip = v.to_string(); }
         if let Some(v) = line.strip_prefix("loc=") { loc = v.to_string(); }
         if let Some(v) = line.strip_prefix("warp=") { warp = v.to_string(); }
+        if let Some(v) = line.strip_prefix("colo=") { colo = v.to_string(); }
         if let Some(v) = line.strip_prefix("__ANTUN_MS__") {
             elapsed_ms = (v.trim().parse::<f64>().unwrap_or(0.0) * 1000.0) as u32;
         }
@@ -1151,7 +1153,16 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
         exit_ip: ip,
         country: loc,
         city: String::new(),
-        colo: if warp == "on" || warp == "plus" { format!("WARP {}", warp) } else { "WARP".into() },
+        // colo= 是 Cloudflare 边缘机房代码（NRT / HKG / LAX …），
+        // 之前误把 warp=on 写进了这里，导致界面显示「CN · WARP on」；
+        // 现在如实返回机房代码，只有拿不到时才退回 WARP 标记。
+        colo: if !colo.trim().is_empty() {
+            colo.trim().to_string()
+        } else if warp == "on" || warp == "plus" {
+            "WARP".into()
+        } else {
+            String::new()
+        },
         latency,
         error: String::new(),
         ..Default::default()

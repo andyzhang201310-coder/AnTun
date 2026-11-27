@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react'
-import { Power, Globe2, MapPin, Gauge, Radio, ChevronRight, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle, Check } from 'lucide-react'
 import { useStore, useLive } from '../store'
+import type { ColoRecord } from '../store'
 import { useEngine } from '../engine/useEngine'
 import { tr } from '../i18n'
-import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, formatBytes, formatRate, formatDuration } from '../components/ui'
+import { Card, Toggle, ProtocolSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, pinnedId, subNodes, nodeStats } = store
+  const { settings, conn, endpoints, scanning, pinnedId, subNodes, nodeStats, coloLog } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
-  const { up, down, upRate, downRate, latencyPoints } = useLive()
+  const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
   const { scan, connect, disconnect } = useEngine()
   const [switching, setSwitching] = useState(false)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
@@ -22,7 +23,6 @@ export function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const countries = Array.from(new Set(endpoints.map((e) => e.country).filter(Boolean)))
   const pinned = endpoints.find((e) => e.id === pinnedId)
   const subNode = settings.connMode === 'subscription' ? subNodes.find((n) => n.id === settings.frontNodeId) : undefined
   const subStat = subNode ? nodeStats[subNode.id] : undefined
@@ -35,6 +35,27 @@ export function HomePage() {
   const toggleConnect = () => {
     if (conn.connecting) return
     conn.connected ? disconnect() : connect()
+  }
+
+  // 观测记录：按 host:port 归并（旧版本键里带协议前缀），命中次数多的排前面，最多展示 5 条
+  const coloRecords = useMemo(() => {
+    const byHost = new Map<string, ColoRecord>()
+    for (const r of Object.values(coloLog)) {
+      const key = `${r.host}:${r.port}`
+      const prev = byHost.get(key)
+      if (!prev) byHost.set(key, { ...r, id: key })
+      else byHost.set(key, {
+        ...(prev.ts >= r.ts ? prev : r),
+        hits: Math.max(prev.hits, r.hits),
+      })
+    }
+    return [...byHost.values()]
+      .sort((a, b) => b.hits - a.hits || b.ts - a.ts)
+      .slice(0, 5)
+  }, [coloLog])
+  const ago = (ts: number) => {
+    const m = Math.floor((Date.now() - ts) / 60000)
+    return m < 1 ? t('justNow') : t('minutesAgo', { n: m })
   }
 
   /** 写入节点选择：WARP 端点会同时退出订阅模式，订阅节点则切到订阅模式 */
@@ -86,9 +107,9 @@ export function HomePage() {
 
   return (
     <div className="page-wrap fade-in stack">
-      {/* 连接主区 */}
+      {/* 连接主区：左列集中「连哪个节点」，右列是连接选项 */}
       <div className="card home-connect-card">
-        <div className="home-connect-side" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+        <div className="home-connect-side">
           <div
             className={`connect-ring ${conn.connected ? 'connected' : ''} ${conn.connecting ? 'pulse' : ''}`}
             style={{ ['--ring' as any]: `${ringDeg}deg` }}
@@ -104,18 +125,18 @@ export function HomePage() {
               </div>
             </div>
           </div>
-          <button className="btn btn-outline" onClick={scan} disabled={scanning}>
-            <RefreshCw size={15} className={scanning ? 'spin' : ''} />{t(scanning ? 'scanning' : 'scan')}
-          </button>
-        </div>
 
-        <div className="stack home-options" style={{ gap: 16 }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{t('exitNode')}</span>
+          {/* 已选节点：原右下角那张卡搬到这里，和连接按钮放在一起 */}
+          <div className="home-node-pick">
+            <div className="home-node-pick-head">
+              <MapPin size={14} className="muted" />
+              <span className="home-node-pick-label">{t('selectNode')}</span>
               <span className={`badge ${settings.connMode === 'subscription' ? 'badge-blue' : 'badge-gray'}`}>
                 {t(settings.connMode === 'subscription' ? 'modeSubscription' : 'modeWarp')}
               </span>
+              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={scan} disabled={scanning}>
+                <RefreshCw size={13} className={scanning ? 'spin' : ''} />{t(scanning ? 'scanning' : 'scan')}
+              </button>
             </div>
             <select
               className="select"
@@ -146,7 +167,7 @@ export function HomePage() {
                 }) : <option value="" disabled>{t('noSubscription')}</option>}
               </optgroup>
             </select>
-            <div className="muted" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+            <div className="muted home-node-pick-hint">
               {switching ? t('switching')
                 : conn.connected ? t('switchReconnect')
                   : settings.connMode === 'subscription'
@@ -154,12 +175,31 @@ export function HomePage() {
                     : t('warpSelectHint')}
             </div>
             {settings.connMode === 'subscription' && !subNodes.length && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, color: 'var(--warn)', fontSize: 11.5 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--warn)', fontSize: 11.5 }}>
                 <AlertCircle size={13} />{t('subMissing')}
                 <button className="btn btn-ghost btn-sm" onClick={() => store.setPage('modes')}>{t('goImportSub')}</button>
               </div>
             )}
+            {subNode && (
+              <div className="home-node-pick-active">
+                <Star size={13} fill="var(--brand)" color="var(--brand)" />
+                <span className="mono">{subNode.name}</span>
+                <span className="muted">{subNode.nodeType.toUpperCase()} · {subNode.server}:{subNode.port}{subStat && subStat.delay > 0 ? ` · ${subStat.delay}ms` : ''}</span>
+                <button className="btn btn-ghost btn-sm" disabled={switching} onClick={() => void pinWarp(null)}>{t('switchToWarp')}</button>
+              </div>
+            )}
+            {!subNode && pinned && (
+              <div className="home-node-pick-active">
+                <Star size={13} fill="var(--brand)" color="var(--brand)" />
+                <span className="mono">{pinned.host}:{pinned.port}</span>
+                <span className="muted">{pinned.latency > 0 ? `${pinned.latency}ms` : t('probeUntested')} · {pinned.protocol.toUpperCase()}</span>
+                <button className="btn btn-ghost btn-sm" onClick={() => store.pinEndpoint(null)}>{t('unlock')}</button>
+              </div>
+            )}
           </div>
+        </div>
+
+        <div className="stack home-options" style={{ gap: 16 }}>
           <ProtocolSelect value={settings.proto} onChange={(p) => store.setSetting('proto', p)} label={t('protocol')} availableLabel={t('available')} />
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t('connectOptions')}</div>
@@ -190,28 +230,52 @@ export function HomePage() {
           color={conn.latency < 250 ? 'var(--success)' : conn.latency < 600 ? 'var(--warn)' : 'var(--danger)'} />
       </div>
 
-      {/* 国家过滤 + 实时图表 + 吞吐 */}
+      {/* 出口机房（可手动换端点） + 实时延迟 */}
       <div className="grid-2">
-        <Card title={<><Globe2 size={16} />{t('countryFilter')}</>} sub={t('countryFilterDesc')}>
-          {countries.length ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {countries.map((c) => {
-                const on = store.allowedCountries.includes(c)
+        <Card title={<><Globe2 size={16} />{t('exitColo')}</>} sub={t('exitColoDesc')}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <div className="strong mono" style={{ fontSize: 19 }}>
+              {conn.country ? `${conn.country} · ${conn.colo}` : '—'}
+            </div>
+            <span className={`badge ${conn.connected ? 'badge-blue' : 'badge-gray'}`}>
+              {t(conn.connected ? 'coloLive' : 'coloIdle')}
+            </span>
+            {conn.city && <span className="muted" style={{ fontSize: 11.5 }}>{conn.city}</span>}
+          </div>
+          <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.6 }}>{t('exitColoHint')}</div>
+
+          {coloRecords.length ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                <span className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase' }}>{t('coloLogTitle')}</span>
+                <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={store.clearColoLog}>{t('clear')}</button>
+              </div>
+              {coloRecords.map((r) => {
+                // 机房只跟端点地址有关，按 host:port 在当前协议列表里找对应端点
+                const cur = endpoints.find((e) => e.host === r.host && e.port === r.port)
+                const usable = !!cur
+                const active = !!cur && pinnedId === cur.id && settings.connMode !== 'subscription'
                 return (
-                  <button key={c} className={`badge ${on ? 'badge-blue' : 'badge-gray'}`}
-                    onClick={() => store.toggleCountry(c)} style={{ cursor: 'pointer', padding: '6px 12px', fontSize: 12 }}>
-                    {on && <span className="dot" />}{c}
-                  </button>
+                  <div
+                    key={r.id}
+                    className={`colo-row ${usable ? '' : 'disabled'} ${active ? 'selected' : ''}`}
+                    onClick={() => { if (cur && !active) void pinWarp(cur.id) }}
+                    role="button" tabIndex={usable ? 0 : -1}
+                    title={usable ? t('coloPinHint') : t('coloUnavailable')}
+                    onKeyDown={(ev) => { if (ev.key === 'Enter' && cur && !active) void pinWarp(cur.id) }}
+                  >
+                    <span className="cell mono strong">{r.host}:{r.port}</span>
+                    <span className="cell" style={{ color: 'var(--brand)', fontWeight: 700 }}>{r.colo || '—'}</span>
+                    <span className="cell muted">{r.country || '—'} · {ago(r.ts)}</span>
+                    <span className="cell" style={{ textAlign: 'right' }}>
+                      {active ? <Check size={14} color="var(--brand)" /> : usable ? <Star size={14} className="muted" /> : <span className="muted" style={{ fontSize: 10.5 }}>{t('na')}</span>}
+                    </span>
+                  </div>
                 )
               })}
             </div>
           ) : (
-            <div>
-              <div className="strong mono" style={{ fontSize: 13 }}>
-                {conn.country ? `${conn.country} · ${conn.colo}` : '—'}
-              </div>
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.6 }}>{t('endpointGeoHint')}</div>
-            </div>
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 12, lineHeight: 1.6 }}>{t('coloEmpty')}</div>
           )}
         </Card>
         <Card title={<><Radio size={16} />{t('liveLatency')}</>}
@@ -220,8 +284,10 @@ export function HomePage() {
         </Card>
       </div>
 
-      <div className="grid-2">
-        <Card title={<><Gauge size={16} />{t('throughput')}</>}>
+      {/* 实时速率 + 波形 */}
+      <Card title={<><Gauge size={16} />{t('throughput')}</>}
+        sub={ratePoints.length ? t('rateWindow', { n: ratePoints.length }) : t('rateEmpty')}>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
             <div>
               <div className="muted" style={{ fontSize: 11 }}><ArrowUpRight size={12} style={{ verticalAlign: 'middle' }} /> {t('upRate')}</div>
@@ -234,37 +300,15 @@ export function HomePage() {
               <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(down)}</div>
             </div>
           </div>
-        </Card>
-        <Card title={<><MapPin size={16} />{t('selectNode')}</>} sub={subNode ? t('modeSubscription') : t('clickToPin')}>
-          {subNode ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Star size={18} fill="var(--brand)" color="var(--brand)" />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="strong mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNode.name}</div>
-                <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
-                  {subNode.nodeType.toUpperCase()} · {subNode.server}:{subNode.port}{subStat && subStat.delay > 0 ? ` · ${subStat.delay}ms` : ''}
-                </div>
-              </div>
-              <button className="btn btn-ghost btn-sm" disabled={switching} onClick={() => void pinWarp(null)}>{t('switchToWarp')}</button>
-            </div>
-          ) : pinned ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Star size={18} fill="var(--brand)" color="var(--brand)" />
-              <div style={{ flex: 1 }}>
-                <div className="strong mono">{pinned.host}:{pinned.port}</div>
-                <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
-                  {pinned.latency > 0 ? `${pinned.latency}ms · ` : ''}{pinned.protocol.toUpperCase()}
-                </div>
-              </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => store.pinEndpoint(null)}>{t('unlock')}</button>
-            </div>
-          ) : (
-            <div className="muted" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              {t('autoSelect')} <ChevronRight size={14} />
-            </div>
-          )}
-        </Card>
-      </div>
+          <div className="rate-legend">
+            <span><i style={{ background: 'var(--brand)' }} />{t('downRate')}</span>
+            <span><i style={{ background: 'var(--warn)' }} />{t('upRate')}</span>
+          </div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <RateChart points={ratePoints} />
+        </div>
+      </Card>
 
       {/* 缓存端点 */}
       <Card title={<><Server size={16} />{t('cacheEndpoints')}</>} sub={`${t('totalNodes', { n: endpoints.length })} · ${t('cacheHint')}`}>

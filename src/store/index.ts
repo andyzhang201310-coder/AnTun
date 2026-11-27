@@ -71,12 +71,34 @@ const DEFAULT_RULES: Rule[] = [
 let uid = 0
 export const newId = () => `${Date.now().toString(36)}-${(uid++).toString(36)}`
 
+/**
+ * 端点 → 实际出口机房的观测记录。
+ * Cloudflare 的 anycast 出口由就近路由决定，客户端无法指定；
+ * 但不同端点段可能落到不同 PoP，所以把每次连接的真实结果记下来，
+ * 用户就能按「我要 HKG」反查该锁哪个端点 —— 这是唯一可手动调整的路径。
+ */
+export interface ColoRecord {
+  /** 端点 id（awg:1.2.3.4:2408），'default' 表示用凭证端点 */
+  id: string
+  host: string
+  port: number
+  country: string
+  colo: string
+  city: string
+  /** 最近一次观测到该结果的毫秒时间戳 */
+  ts: number
+  /** 观测次数，用于排序稳定性 */
+  hits: number
+}
+
 interface AppStore {
   // 持久化偏好
   settings: Settings
   page: PageId
   pinnedId: string | null
   allowedCountries: string[]
+  /** 端点 → 实测出口机房（持久化，只保留最近观测） */
+  coloLog: Record<string, ColoRecord>
   subscriptions: Subscription[]
   subNodes: SubNode[]
   nodeStats: Record<string, NodeStat>
@@ -99,6 +121,8 @@ interface AppStore {
   setScanning: (b: boolean) => void
   pinEndpoint: (id: string | null) => void
   toggleCountry: (c: string) => void
+  recordColo: (r: Omit<ColoRecord, 'ts' | 'hits'>) => void
+  clearColoLog: () => void
   addSubscription: (s: Subscription) => void
   removeSubscription: (id: string) => void
   setSubNodes: (nodes: SubNode[]) => void
@@ -163,6 +187,7 @@ export const useStore = create<AppStore>()(
       page: 'home',
       pinnedId: null,
       allowedCountries: [],
+      coloLog: {},
       subscriptions: [],
       subNodes: [],
       nodeStats: {},
@@ -188,6 +213,25 @@ export const useStore = create<AppStore>()(
           ? s.allowedCountries.filter((x) => x !== c)
           : [...s.allowedCountries, c],
       })),
+      recordColo: (r) => set((s) => {
+        // 以 host:port 为键：机房取决于端点地址，与协议无关，
+        // 换协议后同一条记录仍然可用（旧版本用 `协议:host:port`，读取时按 host:port 归并）
+        const key = `${r.host}:${r.port}`
+        const prev = s.coloLog[key]
+        const hits = (prev?.hits ?? 0) + 1
+        // 只保留最近 12 条观测，避免长期使用后 localStorage 无限增长
+        const rest = Object.entries(s.coloLog)
+          .filter(([k]) => k !== key)
+          .sort((a, b) => b[1].ts - a[1].ts)
+          .slice(0, 11)
+        return {
+          coloLog: {
+            ...Object.fromEntries(rest),
+            [key]: { ...r, id: key, ts: Date.now(), hits },
+          },
+        }
+      }),
+      clearColoLog: () => set({ coloLog: {} }),
       addSubscription: (sub) => set((s) => ({
         subscriptions: [sub, ...s.subscriptions.filter((x) => x.url !== sub.url)],
       })),
@@ -243,6 +287,7 @@ export const useStore = create<AppStore>()(
         page: s.page,
         pinnedId: s.pinnedId,
         allowedCountries: s.allowedCountries,
+        coloLog: s.coloLog,
         subscriptions: s.subscriptions,
         subNodes: s.subNodes,
         rules: s.rules,
@@ -262,6 +307,8 @@ interface LiveStore {
   upRate: number
   downRate: number
   latencyPoints: LatencyPoint[]
+  /** 每秒一帧的上下行速率，用于波形图（约 1 分钟窗口） */
+  ratePoints: { t: number; up: number; down: number }[]
   /** 每秒心跳：即使读取流量失败，首页的会话时长也能继续走字 */
   tick: number
   setTraffic: (t: { up: number; down: number; upRate: number; downRate: number }) => void
@@ -275,11 +322,15 @@ const EMPTY_LIVE = { up: 0, down: 0, upRate: 0, downRate: 0 }
 export const useLive = create<LiveStore>()((set) => ({
   ...EMPTY_LIVE,
   latencyPoints: [],
+  ratePoints: [],
   tick: 0,
-  setTraffic: (t) => set(t),
+  setTraffic: (t) => set((s) => ({
+    ...t,
+    ratePoints: [...s.ratePoints.slice(-89), { t: Date.now(), up: t.upRate, down: t.downRate }],
+  })),
   pushLatency: (p) => set((s) => ({ latencyPoints: [...s.latencyPoints.slice(-59), p] })),
   bumpTick: () => set((s) => ({ tick: s.tick + 1 })),
-  resetLive: () => set({ ...EMPTY_LIVE, latencyPoints: [], tick: 0 }),
+  resetLive: () => set({ ...EMPTY_LIVE, latencyPoints: [], ratePoints: [], tick: 0 }),
 }))
 
 /** 把语言/主题同步到 document（供主题切换调用） */

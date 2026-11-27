@@ -201,10 +201,43 @@ a { color: inherit; text-decoration: none; }
   gap: 28px; align-items: center; padding: 28px;
 }
 .home-connect-side, .home-options { min-width: 0; }
+.home-connect-side { display: flex; flex-direction: column; align-items: center; gap: 16px; }
 .home-options .card { min-width: 0; overflow: hidden; }
 .home-options .field-row { flex-wrap: wrap; align-items: center; }
 .home-options .field-label { min-width: 150px; }
 .home-options .field-row > .switch, .home-options .field-row > .proto-select { margin-left: auto; }
+
+/* ============ 已选节点（连接区） ============ */
+.home-node-pick {
+  width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-radius: 14px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.home-node-pick-head { display: flex; align-items: center; gap: 8px; }
+.home-node-pick-label { font-size: 12.5px; font-weight: 700; }
+.home-node-pick .select { width: 100%; }
+.home-node-pick-hint { font-size: 11px; line-height: 1.5; }
+.home-node-pick-active {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px dashed var(--border);
+  font-size: 11.5px;
+}
+.home-node-pick-active .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-node-pick-active .btn { margin-left: auto; }
+
+/* ============ 出口机房记录 ============ */
+.colo-row {
+  display: grid; grid-template-columns: 1.5fr .7fr 1fr auto; gap: 10px; align-items: center;
+  padding: 9px 12px; border-radius: 10px; cursor: pointer; transition: background .2s;
+}
+.colo-row:hover { background: var(--surface-2); }
+.colo-row.selected { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--brand); }
+.colo-row.disabled { opacity: .5; cursor: not-allowed; }
+.colo-row .cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+
+/* ============ 速率波形图例 ============ */
+.rate-legend { display: flex; gap: 14px; align-items: center; font-size: 11px; color: var(--text-3); }
+.rate-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 
 /* ============ 连接圆环 ============ */
 .connect-ring {
@@ -260,7 +293,8 @@ a { color: inherit; text-decoration: none; }
 /* ============ 响应式：窄窗口 ============ */
 @media (max-width: 1180px) {
   .home-connect-card { grid-template-columns: 1fr; gap: 22px; padding: 24px; }
-  .home-connect-side { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  .home-connect-side { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: flex-end; }
+  .home-node-pick { flex: 1 1 260px; max-width: none; }
   .home-options .field-row { flex-wrap: nowrap; }
 }
 
