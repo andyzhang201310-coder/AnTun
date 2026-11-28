@@ -426,10 +426,108 @@ fn ensure_wintun(app: &AppHandle) -> Result<PathBuf, String> {
     Err("TUN 需要 wintun.dll 驱动：本机没有找到（装了 Cloudflare WARP 或 WireGuard 的机器会自带）。请安装其一，或把 wintun.dll 放到数据目录后重试。".into())
 }
 
+/// 提权重启时新实例带的标记参数：告诉新进程「你是被旧实例提权拉起来的」。
+const RELAUNCH_ARG: &str = "--elevated-relaunch";
+/// 新实例要等待退出的旧进程 pid。
+const RELAUNCH_WAIT_ARG: &str = "--elevated-wait-pid=";
+
+/// 启动阶段的诊断日志。
+///
+/// 提权重启的进程是 ShellExecuteW 拉起的独立进程，没有控制台，stderr 无处可看；
+/// 出问题时只能靠这个文件回溯（`%APPDATA%\com.antun.client\relaunch.log`）。
+pub fn boot_log(msg: &str) {
+    let Some(dir) = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|p| p.join("com.antun.client"))
+    else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join("relaunch.log");
+    // 只保留最近的一段：超过 64 KB 就清空重写，避免长期使用后无限增长
+    if std::fs::metadata(&path).map(|m| m.len() > 64 * 1024).unwrap_or(false) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "[{}] {}", ms, msg);
+    }
+}
+
+/// 把 panic 也写进启动日志，避免面板进程崩溃后完全无迹可查。
+pub fn install_panic_log() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        boot_log(&format!("PANIC {}", info));
+        default_hook(info);
+    }));
+}
+
+/// 本次启动是否由「以管理员身份重启」发起，并返回需要等待退出的旧进程 pid。
+///
+/// 旧实例在 ShellExecuteW 返回后才退出，而新实例可能已经起来了：如果不先等旧进程
+/// 真正结束，新实例会撞上单实例插件被判定为二次启动直接退掉，旧实例随后也退出，
+/// 结果一个进程都不剩（表现为「点了以管理员身份重启，应用没起来」）。
+pub fn pending_relaunch_pid() -> Option<u32> {
+    std::env::args()
+        .find_map(|a| a.strip_prefix(RELAUNCH_WAIT_ARG).and_then(|v| v.parse::<u32>().ok()))
+}
+
+/// 等待指定进程退出，最多 `timeout`。用于提权重启时等旧实例释放单实例锁与 WebView2 数据目录。
+pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) {
+    let started = std::time::Instant::now();
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        const WAIT_FAILED: u32 = 4294967295;
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            boot_log(&format!(
+                "wait pid={} OpenProcess failed err={}",
+                pid,
+                GetLastError()
+            ));
+            return;
+        }
+        let rc = WaitForSingleObject(handle, timeout.as_millis() as u32);
+        boot_log(&format!(
+            "wait pid={} rc={}{} elapsed={}ms",
+            pid,
+            rc,
+            if rc == WAIT_OBJECT_0 {
+                " (exited)"
+            } else if rc == WAIT_TIMEOUT {
+                " (timeout)"
+            } else if rc == WAIT_FAILED {
+                " (failed)"
+            } else {
+                ""
+            },
+            started.elapsed().as_millis()
+        ));
+        CloseHandle(handle);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (pid, timeout);
+    }
+}
+
 /// 以管理员身份重启本应用。
 ///
-/// TUN 模式必须提权才能建虚拟网卡。这里用 ShellExecuteW 的 runas 动词拉起同一份 exe，
-/// 然后退出当前实例（单实例锁会让新进程接管），前端不需要自己处理进程生命周期。
+/// TUN 模式必须提权才能建虚拟网卡。用 ShellExecuteW 的 runas 动词拉起同一份 exe，
+/// 并把当前 pid 一起传过去：新实例启动时会先等旧进程退出，再继续初始化。
+/// 如果用户取消了 UAC，ShellExecuteW 返回错误码，此时保持当前实例运行。
 #[tauri::command]
 pub fn relaunch_elevated(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
@@ -441,12 +539,16 @@ pub fn relaunch_elevated(app: AppHandle) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| format!("定位程序: {}", e))?;
         let verb: Vec<u16> = "runas\0".encode_utf16().collect();
         let file: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let params: Vec<u16> = format!("{} {}{}", RELAUNCH_ARG, RELAUNCH_WAIT_ARG, std::process::id())
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let rc = unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),
                 verb.as_ptr(),
                 file.as_ptr(),
-                std::ptr::null(),
+                params.as_ptr(),
                 std::ptr::null(),
                 SW_SHOWNORMAL,
             )
@@ -462,6 +564,11 @@ pub fn relaunch_elevated(app: AppHandle) -> Result<(), String> {
         let _ = app;
         Err("仅 Windows 支持以管理员身份重启".into())
     }
+}
+
+/// 是否是「以管理员身份重启」拉起来的新实例（此时不注册单实例插件）。
+pub fn is_elevated_relaunch() -> bool {
+    std::env::args().any(|a| a == RELAUNCH_ARG)
 }
 
 #[tauri::command]

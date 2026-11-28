@@ -87,6 +87,22 @@ fn quit_ready(app: AppHandle) {
 }
 
 pub fn run() {
+    // 「以管理员身份重启」：新实例启动前先等旧实例真正退出，再去初始化单实例插件与 WebView2。
+    // 否则新实例会撞上单实例插件被当成二次启动直接退出，旧实例随即也退出 → 一个进程都不剩
+    // （表现为「点了以管理员身份重启，应用没起来」）。同理，WebView2 的用户数据目录也要等
+    // 旧进程释放后才能复用。
+    core::install_panic_log();
+    if let Some(pid) = core::pending_relaunch_pid() {
+        core::boot_log(&format!(
+            "relaunch start pid={} wait_for={} elevated_arg={}",
+            std::process::id(),
+            pid,
+            core::is_elevated_relaunch()
+        ));
+        core::wait_for_process_exit(pid, std::time::Duration::from_secs(10));
+        core::boot_log("relaunch wait done");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 二次双击 exe：唤起已有窗口，避免启动第二个客户端争抢端口
@@ -229,6 +245,7 @@ pub fn run() {
             }
             let tray = builder.build(app)?;
             app.state::<TrayState>().0.lock().unwrap().replace(tray);
+            core::boot_log("setup ok (window + tray ready)");
             Ok(())
         })
         .run(tauri::generate_context!())
