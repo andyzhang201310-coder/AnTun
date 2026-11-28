@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import type { StateStorage } from 'zustand/middleware'
 import type {
   Settings, ConnState, Endpoint, Rule, LogEntry, HistoryStep,
-  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat, SavedNode,
+  LatencyPoint, PageId, Lang, Theme, Platform, Subscription, SubNode, NodeStat, SavedNode, ConnEntry,
 } from '../types'
 
 const DEFAULT_SETTINGS: Settings = {
@@ -403,10 +403,13 @@ interface LiveStore {
   latencyPoints: LatencyPoint[]
   /** 每秒一帧的上下行速率，用于波形图（约 1 分钟窗口） */
   ratePoints: { t: number; up: number; down: number }[]
+  /** 当前经过隧道的连接（首页「连接设备」），约 2 秒刷新一次 */
+  conns: ConnEntry[]
   /** 每秒心跳：即使读取流量失败，首页的会话时长也能继续走字 */
   tick: number
   setTraffic: (t: { up: number; down: number; upRate: number; downRate: number }) => void
   pushLatency: (p: LatencyPoint) => void
+  setConns: (c: ConnEntry[]) => void
   bumpTick: () => void
   resetLive: () => void
 }
@@ -417,14 +420,16 @@ export const useLive = create<LiveStore>()((set) => ({
   ...EMPTY_LIVE,
   latencyPoints: [],
   ratePoints: [],
+  conns: [],
   tick: 0,
   setTraffic: (t) => set((s) => ({
     ...t,
     ratePoints: [...s.ratePoints.slice(-89), { t: Date.now(), up: t.upRate, down: t.downRate }],
   })),
   pushLatency: (p) => set((s) => ({ latencyPoints: [...s.latencyPoints.slice(-59), p] })),
+  setConns: (conns) => set({ conns }),
   bumpTick: () => set((s) => ({ tick: s.tick + 1 })),
-  resetLive: () => set({ ...EMPTY_LIVE, latencyPoints: [], ratePoints: [], tick: 0 }),
+  resetLive: () => set({ ...EMPTY_LIVE, latencyPoints: [], ratePoints: [], conns: [], tick: 0 }),
 }))
 
 /** 把语言/主题同步到 document（供主题切换调用） */

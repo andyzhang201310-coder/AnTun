@@ -7,7 +7,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { SubNode } from './types'
+import type { SubNode, ConnSnapshot } from './types'
 
 export interface WarpCredential {
   privateKey: string
@@ -171,6 +171,7 @@ declare global {
       coreCancelConnect: () => Promise<void>
       coreStatus: () => Promise<boolean>
       coreTraffic: (apiPort: number) => Promise<{ up: number; down: number; upTotal: number; downTotal: number }>
+      coreConnections: (apiPort: number) => Promise<ConnSnapshot>
       saveCredential: (cred: WarpCredential) => Promise<void>
       loadCredential: () => Promise<WarpCredential>
       credentialInfo: () => Promise<CredentialInfo>
@@ -241,6 +242,7 @@ export function initDesktopBridge() {
     coreCancelConnect: () => invoke<void>('core_cancel_connect'),
     coreStatus: () => invoke<boolean>('core_status'),
     coreTraffic: (apiPort) => invoke<{ up: number; down: number; upTotal: number; downTotal: number }>('core_traffic', { apiPort }),
+    coreConnections: (apiPort) => invoke<ConnSnapshot>('core_connections', { apiPort }),
     saveCredential: (cred) => invoke<void>('save_credential', { cred }),
     loadCredential: () => invoke<WarpCredential>('load_credential'),
     credentialInfo: () => invoke<CredentialInfo>('credential_info'),

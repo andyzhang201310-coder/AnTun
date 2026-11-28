@@ -372,6 +372,33 @@ function startTrafficLoop() {
   trafficTimer = window.setInterval(() => { void pollTraffic() }, 1000)
 }
 
+// ============ 连接列表（首页「连接设备」） ============
+// /connections 比 /traffic 重（核心要把整张连接表序列化），
+// 所以单独用 2 秒节奏：流量曲线要每秒一帧，连接列表不需要。
+let connsBusy = false
+let connsTimer: number | null = null
+
+async function pollConnections() {
+  if (connsBusy) return
+  if (!useStore.getState().conn.connected) return
+  const adapter = engineAdapter
+  if (!adapter?.connections) return
+  connsBusy = true
+  try {
+    const r = await adapter.connections()
+    useLive.getState().setConns(r.connections)
+  } catch {
+    /* 单次读取失败保留上一帧，下一轮再试 */
+  } finally {
+    connsBusy = false
+  }
+}
+
+function startConnsLoop() {
+  if (typeof window === 'undefined' || connsTimer !== null) return
+  connsTimer = window.setInterval(() => { void pollConnections() }, 2000)
+}
+
 /** 连接引擎控制器：把适配器与全局状态桥接，页面只需调用这里的动作。 */
 export function useEngine() {
   // 平台检测 & 适配器创建
@@ -401,6 +428,7 @@ export function useEngine() {
       s.setPlatform(platform)
       ensureAdapter()
       startTrafficLoop()
+      startConnsLoop()
       // 托盘状态同步
       ;(window as any)._antunSyncTray = () => desk?.notifyStatus?.(useStore.getState().conn.connected)
     }

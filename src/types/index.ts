@@ -168,6 +168,36 @@ export interface LatencyPoint {
   ms: number
 }
 
+/**
+ * 一条经过隧道的连接（核心 /connections 的投影）。
+ * 首页「连接设备」据此显示当前有哪些应用在走 VPN。
+ */
+export interface ConnEntry {
+  id: string
+  /** 目标域名，无域名时为对端 IP */
+  host: string
+  port: string
+  /** tcp / udp */
+  network: string
+  /** 进程名，例如 chrome.exe */
+  process: string
+  /** 命中的分流规则 */
+  rule: string
+  /** 实际出口（WARP / 节点名） */
+  chain: string
+  upload: number
+  download: number
+  /** 连接建立时间（核心返回的原始字符串） */
+  start: string
+  sourceIp: string
+}
+
+export interface ConnSnapshot {
+  connections: ConnEntry[]
+  uploadTotal: number
+  downloadTotal: number
+}
+
 /** 引擎适配器接口 —— 所有端（Web/Android/Windows/TV）统一实现 */
 export interface EngineAdapter {
   readonly id: string
@@ -181,6 +211,8 @@ export interface EngineAdapter {
   probe(onPoint: (p: LatencyPoint) => void): void
   stopProbe(): void
   traffic?(): Promise<{ up: number; down: number; upRate?: number; downRate?: number }>
+  /** 当前经过隧道的连接（首页「连接设备」面板） */
+  connections?(): Promise<ConnSnapshot>
 }
 
 export interface ConnectOptions {

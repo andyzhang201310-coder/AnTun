@@ -302,6 +302,27 @@ a { color: inherit; text-decoration: none; }
 /* 内层 span 必须给 min-width:0，否则 flex 子项的 auto 最小宽度会顶住、省略号不生效 */
 .with-flag > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
+/* ============ 连接明细（首页「连接设备」） ============ */
+.conn-table { display: flex; flex-direction: column; }
+.conn-head, .conn-row {
+  display: grid; grid-template-columns: 1.05fr 1.45fr .85fr .8fr 1.15fr;
+  gap: 10px; align-items: center;
+}
+.conn-head {
+  padding: 0 10px 6px; font-size: 10.5px; font-weight: 700; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .5px;
+}
+/* 连接数可能很多（浏览器一次几十条），限高滚动，避免首页被无限拉长 */
+.conn-body { max-height: 208px; overflow-y: auto; overscroll-behavior: contain; }
+.conn-row { padding: 7px 10px; border-radius: 9px; transition: background .2s; }
+.conn-row:hover { background: var(--surface-2); }
+.conn-row .cell {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px;
+}
+.conn-row .conn-app { display: flex; align-items: center; gap: 6px; }
+.conn-row .conn-app span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ============ 出口机房记录 ============ */
 .colo-row {
   display: grid; grid-template-columns: 1.4fr .6fr 1.4fr auto; gap: 10px; align-items: center;
@@ -422,6 +443,9 @@ a { color: inherit; text-decoration: none; }
   .connect-ring { width: 180px; height: 180px; }
   .node-row, .table-head { grid-template-columns: 1.4fr 1fr .7fr auto; }
   .node-row .cell.hide-sm, .table-head .hide-sm { display: none; }
+  /* 手机上连接明细只留「应用 / 目标 / 流量」三列 */
+  .conn-head, .conn-row { grid-template-columns: 1.1fr 1.5fr 1.3fr; }
+  .conn-head .hide-sm, .conn-row .hide-sm { display: none; }
   /* 首页连接区在手机上改单列 */
   .page-wrap > .card:first-child { grid-template-columns: 1fr !important; }
 }

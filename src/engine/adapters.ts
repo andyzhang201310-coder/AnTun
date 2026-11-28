@@ -1,4 +1,4 @@
-import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, LatencyPoint, Protocol, Platform } from '../types'
+import type { EngineAdapter, ConnectOptions, ConnState, Endpoint, LatencyPoint, Protocol, Platform, ConnSnapshot } from '../types'
 import { newId } from '../store'
 import type { CoreResult, WarpCredential } from '../desktop'
 
@@ -291,6 +291,16 @@ export class DesktopAdapter implements EngineAdapter {
       down: Number(r.downTotal) || 0,
       upRate: Number(r.up) || 0,
       downRate: Number(r.down) || 0,
+    }
+  }
+
+  /** 当前经过隧道的连接：首页「连接设备」用 */
+  async connections(): Promise<ConnSnapshot> {
+    const r = await this.desk.coreConnections(this.apiPort) as ConnSnapshot
+    return {
+      connections: Array.isArray(r?.connections) ? r.connections : [],
+      uploadTotal: Number(r?.uploadTotal) || 0,
+      downloadTotal: Number(r?.downloadTotal) || 0,
     }
   }
 

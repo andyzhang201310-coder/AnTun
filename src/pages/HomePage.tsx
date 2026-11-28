@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle, Check } from 'lucide-react'
+import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, AlertCircle, Check, MonitorSmartphone, AppWindow } from 'lucide-react'
 import { useStore, useLive } from '../store'
 import type { ColoRecord } from '../store'
 import { useEngine, waitForConnectIdle } from '../engine/useEngine'
@@ -13,7 +13,7 @@ export function HomePage() {
   const store = useStore()
   const { settings, conn, endpoints, scanning, nodeTesting, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling, lastError } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
-  const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
+  const { up, down, upRate, downRate, latencyPoints, ratePoints, conns } = useLive()
   const { scan, probeSubNodes, connect, disconnect, cancel } = useEngine()
   const [switching, setSwitching] = useState(false)
   /** 本次断开重连的原因（空 = 换节点），用于把提示文案说清楚 */
@@ -66,7 +66,14 @@ export function HomePage() {
     const d = nodeStats[id]?.delay ?? 0
     return d > 0 ? d : Number.MAX_SAFE_INTEGER
   }
-  const subOptions: FlagOption[] = [...subNodes]
+  /**
+   * 下拉里只列「测速通过」的订阅节点。
+   * 测不通（delay<=0）与从未测过的节点依然留在订阅里，但不进下拉：
+   * 订阅动辄几十个节点，混着不可用的挑，选中一个连不上的只会白等一轮超时。
+   * 当前已选节点即使这次没测通也要保留在列表里，否则触发器会显示「未选择节点」。
+   */
+  const testedNodes = subNodes.filter((n) => (nodeStats[n.id]?.delay ?? 0) > 0)
+  const subOptions: FlagOption[] = [...testedNodes]
     .sort((a, b) => latencyOf(a.id) - latencyOf(b.id))
     .map((n) => ({
       value: `sub:${n.id}`,
@@ -74,7 +81,7 @@ export function HomePage() {
       flag: codeFromNode(n.name, n.server),
       hint: nodeStats[n.id]?.delay > 0 ? `${nodeStats[n.id].delay}ms` : '',
     }))
-  if (subNode && !subNodes.some((n) => n.id === subNode.id)) {
+  if (subNode && !testedNodes.some((n) => n.id === subNode.id)) {
     subOptions.unshift({
       value: `sub:${subNode.id}`,
       label: displayNodeName(subNode.name),
@@ -83,10 +90,20 @@ export function HomePage() {
     })
   }
   if (!subOptions.length) {
-    subOptions.push({ value: 'sub:none', label: t('noSubscription'), disabled: true })
+    subOptions.push({
+      value: 'sub:none',
+      label: subNodes.length ? t('subProbeFirst') : t('noSubscription'),
+      disabled: true,
+    })
   }
 
   const latestLatency = latencyPoints.length ? latencyPoints[latencyPoints.length - 1].ms : conn.latency
+  /**
+   * 「连接设备」的计数口径：按进程名去重（拿不到进程时退回目标域名），
+   * 也就是「有几个应用正在走 VPN」。同一浏览器的十几条连接不算十几台设备。
+   */
+  const appKeys = new Set(conns.map((c) => c.process || c.host).filter(Boolean))
+  const appCount = appKeys.size
   const ringDeg = conn.connecting ? 220 : conn.connected ? 360 : 0
   const toggleConnect = () => {
     // 连接中点一下就是取消：以前这里直接 return，点错只能干等 Psiphon 重试跑完
@@ -308,6 +325,11 @@ export function HomePage() {
                 },
               ]}
             />
+            {settings.connMode === 'subscription' && subNodes.length > 0 && (
+              <div className="muted" style={{ fontSize: 10.5 }}>
+                {t('subTestedOnly', { ok: testedNodes.length, total: subNodes.length })}
+              </div>
+            )}
             {settings.connMode === 'subscription' && !subNode && subNodes.length > 0 && (
               <div className="muted" style={{ fontSize: 11.5, color: 'var(--warn)' }}>{t('noNodeSelected')}</div>
             )}
@@ -417,7 +439,7 @@ export function HomePage() {
         </div>
       </div>
 
-      {/* 出口信息 */}
+      {/* 出口信息 + 当前连接设备 */}
       <div className="grid-3">
         <Stat label={t('exitIp')} value={
           <span className="with-flag">
@@ -433,29 +455,58 @@ export function HomePage() {
             </span>
           ) : '—'
         } sub={conn.city} />
-        <Stat label={t('latency')} value={conn.latency ? `${conn.latency} ms` : '—'} sub={conn.endpoint ? `${conn.endpoint.host}:${conn.endpoint.port}` : t('endpoint')}
-          color={conn.latency < 250 ? 'var(--success)' : conn.latency < 600 ? 'var(--warn)' : 'var(--danger)'} />
+        <Stat
+          label={t('vpnDevices')}
+          value={conn.connected ? String(appCount) : '—'}
+          sub={conn.connected ? t('connCount', { n: conns.length }) : t('vpnDevicesSub')}
+          color={conn.connected ? 'var(--success)' : undefined}
+        />
       </div>
 
-      {/* 出口机房（可手动换端点） + 实时延迟 */}
-      <div className="grid-2">
-        <Card title={<><Globe2 size={16} />{t('exitColo')}</>} sub={t('exitColoDesc')}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <div className="strong mono with-flag" style={{ fontSize: 19 }}>
-              <Flag code={conn.country} lang={settings.lang} size={19} globe={false} />
-              <span>{conn.country ? `${regionName(conn.country, settings.lang)} · ${conn.colo}` : '—'}</span>
+      {/* 连接明细：全宽表格，五列（应用 / 目标 / 规则 / 出口 / 流量）才放得下 */}
+      <Card title={<><MonitorSmartphone size={16} />{t('connDetail')}</>}
+        sub={conns.length ? t('connSummary', { a: appCount, c: conns.length }) : t('vpnDevicesSub')}>
+        {conns.length ? (
+          <div className="conn-table">
+            <div className="conn-head">
+              <span>{t('connApp')}</span>
+              <span>{t('connHost')}</span>
+              <span className="hide-sm">{t('connRule')}</span>
+              <span className="hide-sm">{t('connChain')}</span>
+              <span style={{ textAlign: 'right' }}>{t('connTraffic')}</span>
             </div>
-            <span className={`badge ${conn.connected ? 'badge-blue' : 'badge-gray'}`}>
-              {t(conn.connected ? 'coloLive' : 'coloIdle')}
-            </span>
-            {conn.city && <span className="muted" style={{ fontSize: 11.5 }}>{conn.city}</span>}
+            <div className="conn-body">
+              {conns.slice(0, 30).map((c) => (
+                <div className="conn-row" key={c.id} title={`${c.process || t('connUnknownApp')} · ${c.sourceIp || '—'}`}>
+                  <span className="cell conn-app">
+                    <AppWindow size={13} className="muted" />
+                    <span>{c.process || t('connUnknownApp')}</span>
+                  </span>
+                  <span className="cell mono" title={`${c.host}:${c.port}`}>{c.host}{c.port ? `:${c.port}` : ''}</span>
+                  <span className="cell hide-sm muted">{c.rule || '—'}</span>
+                  <span className="cell hide-sm">{c.chain || '—'}</span>
+                  <span className="cell mono" style={{ textAlign: 'right' }}>
+                    ↑{formatBytes(c.upload)} ↓{formatBytes(c.download)}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.6 }}>{t('exitColoHint')}</div>
+        ) : (
+          <div className="muted" style={{ fontSize: 12, padding: '26px 12px', textAlign: 'center', lineHeight: 1.6 }}>
+            {conn.connected ? t('connEmpty') : t('connIdle')}
+          </div>
+        )}
+      </Card>
+
+      {/* 端点 → 机房观测记录（出口国家/机房已在上面统计卡里，这里不再重复展示，只留可反选的记录） + 实时延迟 */}
+      <div className="grid-2">
+        <Card title={<><Globe2 size={16} />{t('coloLogTitle')}</>} sub={t('exitColoDesc')}>
+          <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.6 }}>{t('exitColoHint')}</div>
 
           {coloRecords.length ? (
             <div style={{ marginTop: 12 }}>
               <div className="colo-head">
-                <span className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase' }}>{t('coloLogTitle')}</span>
                 <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={store.clearColoLog}>{t('clear')}</button>
               </div>
               {coloRecords.map((r) => {
@@ -519,26 +570,6 @@ export function HomePage() {
         <div style={{ marginTop: 10 }}>
           <RateChart points={ratePoints} />
         </div>
-      </Card>
-
-      {/* 缓存端点 */}
-      <Card title={<><Server size={16} />{t('cacheEndpoints')}</>} sub={`${t('totalNodes', { n: endpoints.length })} · ${t('cacheHint')}`}>
-        {endpoints.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="table-head"><span>{t('nodeHost')}</span><span>{t('nodeProto')}</span><span className="hide-sm">{t('endpointState')}</span><span>{t('nodePing')}</span><span /></div>
-            {endpoints.slice(0, 8).map((e) => (
-              <div key={e.id} className={`node-row ${pinnedId === e.id && settings.connMode !== 'subscription' ? 'selected' : ''}`} onClick={() => void pinWarp(pinnedId === e.id ? null : e.id)} tabIndex={0}>
-                <span className="cell mono strong">{e.host}:{e.port}</span>
-                <span className="cell">{e.protocol.toUpperCase()}</span>
-                <span className="cell hide-sm">{e.loss > 0 ? t('probeFailed') : e.latency > 0 ? t('probeOk') : t('probeUntested')}</span>
-                <span className="cell" style={{ color: e.latency > 0 ? (e.latency < 250 ? 'var(--success)' : 'var(--warn)') : 'var(--text-3)', fontWeight: 700 }}>
-                  {e.latency > 0 ? `${e.latency}ms` : '—'}
-                </span>
-                <span className="cell">{pinnedId === e.id && settings.connMode !== 'subscription' ? <Star size={15} fill="var(--brand)" color="var(--brand)" /> : <Star size={15} className="muted" />}</span>
-              </div>
-            ))}
-          </div>
-        ) : <div className="muted" style={{ fontSize: 12, padding: 20, textAlign: 'center' }}>{t('noData')} — {t('scan')}</div>}
       </Card>
     </div>
   )

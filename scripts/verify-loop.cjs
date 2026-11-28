@@ -1,7 +1,8 @@
-// v1.7.8 真机闭环验收：WARP 直连 → 开 Psiphon → 断开 → 关 Psiphon → 反复直连
+// 真机闭环验收：WARP 直连 → 开 Psiphon → 断开 → 关 Psiphon → 反复直连
 //
 // 用户报障：开机第一次开 Psiphon 连接成功；断开并关闭 Psiphon 后再连一直失败。
 // 1.7.7 曾把根因误判成「网络阻断 WARP UDP」，1.7.8 修正为 DNS 自举死锁 + 子进程代理变量污染。
+// 版本断言从 package.json 读取，bump 后无需改脚本。
 // 本脚本用 __TAURI_INTERNALS__.invoke 直接驱动 Rust core_connect，完整复现报障序列，
 // 断言「关掉 Psiphon 后 WARP 直连仍可成功」。
 //
@@ -136,8 +137,9 @@ const step = async (key, label, psiphon) => {
 }
 
 ;(async () => {
-  const ver = await ev(`(document.body.innerText.match(/v1\\.\\d+\\.\\d+/) || [''])[0]`)
-  check('应用为 v1.7.8', ver === 'v1.7.8', `读到 ${ver || '<空>'}`)
+  const want = 'v' + JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
+  const ver = await ev(`(document.body.innerText.match(/v\\d+\\.\\d+\\.\\d+/) || [''])[0]`)
+  check(`应用为 ${want}`, ver === want, `读到 ${ver || '<空>'}`)
   console.log(`端点：${ENDPOINT}:${ENDPOINT_PORT}`)
 
   // 先确保干净起点

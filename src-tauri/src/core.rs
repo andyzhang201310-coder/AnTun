@@ -728,6 +728,10 @@ ipv6: {ipv6}
 external-controller: 127.0.0.1:{api_port}
 tcp-concurrent: true
 unified-delay: true
+# 首页「连接设备」要显示是哪个应用在走 VPN：进程信息只在这项打开后才随
+# /connections 的 metadata.processPath 返回（默认的 strict 模式下系统代理进来的
+# 连接拿不到 PID）。always 只多一次本地 socket 归属查询，开销可忽略。
+find-process-mode: always
 
 {dns_block}
 proxies:
@@ -874,6 +878,212 @@ pub async fn core_traffic(api_port: u16) -> Result<CoreTraffic, String> {
         down: value.get("down").and_then(|v| v.as_u64()).unwrap_or(0),
         up_total: value.get("upTotal").and_then(|v| v.as_u64()).unwrap_or(0),
         down_total: value.get("downTotal").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
+}
+
+/// 单条连接（把核心 /connections 的原始结构投影成界面要用的字段）
+///
+/// 只保留「谁在连、连到哪、走了哪条规则和节点、用了多少流量」，
+/// 原始结构里还有 dscp、sniffHost 等几十个字段，全量传给前端既慢又没必要。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreConn {
+    pub id: String,
+    /// 目标域名；没有域名时退回目标 IP
+    pub host: String,
+    pub port: String,
+    pub network: String,
+    /// 进程名（取 processPath 的文件名部分，例如 chrome.exe）
+    pub process: String,
+    pub rule: String,
+    /// 命中的出口（chain 的最后一段），例如 WARP / 节点名
+    pub chain: String,
+    pub upload: u64,
+    pub download: u64,
+    pub start: String,
+    pub source_ip: String,
+}
+
+/// 当前所有经过核心转发的连接 + 会话累计流量
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreConns {
+    pub connections: Vec<CoreConn>,
+    pub upload_total: u64,
+    pub download_total: u64,
+}
+
+/// 读满缓冲区：返回实际读到的字节数。
+///
+/// 这里不能用 read_exact —— 核心把 JSON 一次性写完后立刻关连接，
+/// 而 read_exact 在超时/提前关闭时会丢掉已经读到的部分，导致整段 JSON 解析失败。
+fn read_full<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> usize {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => break,
+        }
+    }
+    filled
+}
+
+/// 从核心 REST API 读一个完整 JSON 响应体。
+///
+/// 与 `/traffic`（NDJSON 长流，读一行就够）不同，`/connections` 是一次性完整对象：
+/// Go 的 http 服务在没有 Content-Length 时用 chunked 编码，若直接 read_to_end，
+/// 块长度行会混进正文让 serde 解析失败；所以这里按响应头分别处理两种编码。
+fn read_api_json(api_port: u16, path: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Read, Write as IoWrite};
+    use std::net::{SocketAddr, TcpStream};
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], api_port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(600))
+        .map_err(|_| "核心接口不可用".to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(2500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        path, api_port
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("读取核心接口失败: {}", e))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut chunked = false;
+    let mut content_length: Option<usize> = None;
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("读取核心接口失败: {}", e))?;
+        if n == 0 {
+            return Err("核心接口无响应".into());
+        }
+        let text = line.trim_end();
+        if text.is_empty() {
+            break;
+        }
+        let lower = text.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("transfer-encoding:") {
+            chunked = v.contains("chunked");
+        } else if let Some(v) = lower.strip_prefix("content-length:") {
+            content_length = v.trim().parse::<usize>().ok();
+        }
+    }
+
+    let mut body: Vec<u8> = Vec::new();
+    if chunked {
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            let size_text = line.trim().split(';').next().unwrap_or("");
+            let size = usize::from_str_radix(size_text, 16).unwrap_or(0);
+            if size == 0 {
+                break;
+            }
+            let mut buf = vec![0u8; size];
+            let read = read_full(&mut reader, &mut buf);
+            body.extend_from_slice(&buf[..read]);
+            if read < size {
+                break;
+            }
+            // 吃掉块尾 CRLF
+            let mut crlf = [0u8; 2];
+            let _ = read_full(&mut reader, &mut crlf);
+        }
+    } else if let Some(len) = content_length {
+        let mut buf = vec![0u8; len];
+        let read = read_full(&mut reader, &mut buf);
+        body.extend_from_slice(&buf[..read]);
+    } else {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => body.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+    }
+
+    String::from_utf8(body).map_err(|e| format!("核心接口编码错误: {}", e))
+}
+
+/// 读取当前经过隧道的连接列表（首页「连接设备」）。
+///
+/// 和 core_traffic 一样是 async + spawn_blocking：这条请求要等核心把整个
+/// 连接数组写完，放主线程会周期性卡住窗口。
+#[tauri::command]
+pub async fn core_connections(api_port: u16) -> Result<CoreConns, String> {
+    let body = tauri::async_runtime::spawn_blocking(move || read_api_json(api_port, "/connections"))
+        .await
+        .map_err(|e| format!("读取连接失败: {}", e))??;
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("连接数据解析失败: {}", e))?;
+
+    let text = |v: &serde_json::Value, key: &str| -> String {
+        v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+
+    let mut list: Vec<CoreConn> = Vec::new();
+    if let Some(items) = value.get("connections").and_then(|v| v.as_array()) {
+        for item in items {
+            let meta = item.get("metadata").cloned().unwrap_or(serde_json::Value::Null);
+            // 优先域名，其次 sniff 出来的域名，最后退回目标 IP
+            let mut host = text(&meta, "host");
+            if host.is_empty() {
+                host = text(&meta, "sniffHost");
+            }
+            if host.is_empty() {
+                host = text(&meta, "destinationIP");
+            }
+            // processPath 是完整路径，界面只显示进程名
+            let path = text(&meta, "processPath");
+            let process = path.rsplit(&['\\', '/'][..]).next().unwrap_or("").to_string();
+            let rule_name = text(item, "rule");
+            let rule_payload = text(item, "rulePayload");
+            let rule = if rule_payload.is_empty() {
+                rule_name
+            } else if rule_name.is_empty() {
+                rule_payload
+            } else {
+                format!("{}({})", rule_name, rule_payload)
+            };
+            let chain = item
+                .get("chains")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.last())
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            list.push(CoreConn {
+                id: text(item, "id"),
+                host,
+                port: text(&meta, "destinationPort"),
+                network: text(&meta, "network"),
+                process,
+                rule,
+                chain,
+                upload: item.get("upload").and_then(|v| v.as_u64()).unwrap_or(0),
+                download: item.get("download").and_then(|v| v.as_u64()).unwrap_or(0),
+                start: text(item, "start"),
+                source_ip: text(&meta, "sourceIP"),
+            });
+        }
+    }
+    // 流量大的排前面：用户最关心的是「谁在占带宽」
+    list.sort_by(|a, b| (b.upload + b.download).cmp(&(a.upload + a.download)));
+
+    Ok(CoreConns {
+        connections: list,
+        upload_total: value.get("uploadTotal").and_then(|v| v.as_u64()).unwrap_or(0),
+        download_total: value.get("downloadTotal").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
 
