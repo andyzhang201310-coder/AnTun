@@ -897,6 +897,7 @@ fn render_config(
     sub_via_warp: bool,
     psiphon_socks_port: Option<u16>,
     capture_mode: &str,
+    ad_block: bool,
 ) -> String {
     let effective_mtu = if mtu > 0 { mtu } else { 1280 };
     let allow_lan_str = if allow_lan { "true" } else { "false" };
@@ -1002,6 +1003,14 @@ fn render_config(
         String::new()
     };
 
+    // 广告拦截：域名级 REJECT，放在 MATCH 之前，与分流模式无关（proxy / tun 都生效）。
+    // 清单在 adblock.rs，静态内置，不依赖远程规则集。
+    let ad_rules = if ad_block {
+        crate::adblock::rules()
+    } else {
+        String::new()
+    };
+
     format!(
         r#"# AnTun 自动生成的配置（请勿手动修改）· protocol={protocol}
 mixed-port: {port}
@@ -1034,7 +1043,7 @@ rules:
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
   - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
   - DOMAIN-SUFFIX,local,DIRECT
-  - MATCH,PROXY
+{ad_rules}  - MATCH,PROXY
 {tun_block}"#,
         protocol = protocol,
         port = port,
@@ -1046,6 +1055,7 @@ rules:
         outbound = outbound,
         allow_lan_str = allow_lan_str,
         tun_block = tun_block,
+        ad_rules = ad_rules,
     )
 }
 
@@ -1452,6 +1462,8 @@ struct ConnectArgs {
     psiphon_region: String,
     /// 捕获模式：proxy = 只设系统代理；tun = 另建 TUN 虚拟网卡做整机全局
     capture_mode: String,
+    /// 广告拦截：把内置广告/追踪域名直接 REJECT（见 adblock.rs）
+    ad_block: bool,
 }
 
 /// 真正建立连接：下载核心 → 写配置 → 启动 → 通过代理探测出口
@@ -1482,6 +1494,7 @@ pub async fn core_connect(
     psiphon: Option<bool>,
     psiphon_region: Option<String>,
     capture_mode: Option<String>,
+    ad_block: Option<bool>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
     let src = crate::credential::source_of(&cred).to_string();
@@ -1506,6 +1519,7 @@ pub async fn core_connect(
         psiphon: psiphon.unwrap_or(false),
         psiphon_region: psiphon_region.unwrap_or_default(),
         capture_mode: capture_mode.unwrap_or_else(|| "proxy".into()),
+        ad_block: ad_block.unwrap_or(false),
     };
 
     // 连接全过程是同步阻塞的（起 Psiphon 进程、等隧道、起核心、轮询出口），
@@ -1670,6 +1684,7 @@ fn attempt_connect(
         a.sub_via_warp,
         psiphon_port,
         &a.capture_mode,
+        a.ad_block,
     );
     let cfg_path = config_path(app)?;
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写配置: {}", e))?;
@@ -1961,6 +1976,11 @@ mod tests {
     }
 
     fn cfg_capture(dns_mode: &str, guard: bool, sub_exit: &str, sub_via_warp: bool, capture: &str) -> String {
+        cfg_ad(dns_mode, guard, sub_exit, sub_via_warp, capture, false)
+    }
+
+    /// ad = 是否开启广告拦截
+    fn cfg_ad(dns_mode: &str, guard: bool, sub_exit: &str, sub_via_warp: bool, capture: &str, ad_block: bool) -> String {
         let cred = builtin_credential();
         let front = "  - name: \"SUB-NODE\"\n    type: ss\n    server: 1.2.3.4\n    port: 8388";
         render_config(
@@ -1979,6 +1999,7 @@ mod tests {
             sub_via_warp,
             None,
             capture,
+            ad_block,
         )
     }
 
@@ -1990,6 +2011,41 @@ mod tests {
         assert!(cfg.contains("auto-route: true"));
         // DNS 打开时劫持 53，交给核心内部解析器（否则会绕过 fake-ip 规则）
         assert!(cfg.contains("dns-hijack:\n    - any:53"));
+    }
+
+    #[test]
+    fn ad_block_rules_come_before_match() {
+        let cfg = cfg_ad("preset", true, "warp", false, "proxy", true);
+        let ad_pos = cfg.find("DOMAIN-SUFFIX,doubleclick.net,REJECT").expect("缺少广告拦截规则");
+        let match_pos = cfg.find("  - MATCH,PROXY").expect("缺少 MATCH 规则");
+        assert!(ad_pos < match_pos, "广告规则必须在 MATCH 之前，否则永远命中不到");
+        // 每条都以 REJECT 结尾，且是标准规则行（缩进两格）
+        for line in cfg.lines().filter(|l| l.contains(",REJECT")) {
+            assert!(line.starts_with("  - DOMAIN-SUFFIX,"), "规则行格式不对: {line}");
+            assert!(line.ends_with(",REJECT"), "规则行格式不对: {line}");
+        }
+    }
+
+    #[test]
+    fn ad_block_off_emits_no_reject_rules() {
+        let cfg = cfg_with("preset", true, "warp", false);
+        assert!(!cfg.contains(",REJECT"), "关闭广告拦截后不应有 REJECT 规则");
+    }
+
+    #[test]
+    fn ad_block_also_applies_in_tun_mode() {
+        // TUN 只是捕获方式变了，规则表是同一份，广告拦截必须照样在
+        let cfg = cfg_ad("preset", true, "warp", false, "tun", true);
+        assert!(cfg.contains("DOMAIN-SUFFIX,doubleclick.net,REJECT"));
+        assert!(cfg.contains("tun:\n  enable: true"));
+    }
+
+    #[test]
+    fn ad_block_rules_survive_dns_off() {
+        // DNS 关闭时 dns 段为空，广告规则仍要写进 rules
+        let cfg = cfg_ad("off", true, "warp", false, "proxy", true);
+        assert!(!cfg.contains("dns:\n"));
+        assert!(cfg.contains("DOMAIN-SUFFIX,doubleclick.net,REJECT"));
     }
 
     #[test]

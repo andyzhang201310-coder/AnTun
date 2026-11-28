@@ -131,6 +131,8 @@ export interface NetOptions {
   psiphonRegion?: string
   /** 捕获模式：tun 会在核心配置里加 TUN 虚拟网卡（整机全局，需管理员权限） */
   captureMode?: 'proxy' | 'tun'
+  /** 广告拦截：内置广告/追踪域名直接 REJECT */
+  adBlock?: boolean
 }
 
 /** 局域网共享状态（二维码内容就是这个 url） */
@@ -191,6 +193,7 @@ declare global {
       subscriptionFetch: (url: string) => Promise<SubNode[]>
       subscriptionParse: (content: string) => Promise<SubNode[]>
       notifyStatus: (connected: boolean) => Promise<void>
+      adBlockInfo: () => Promise<{ count: number; samples: string[] }>
       quit: () => Promise<void>
       onQuitRequest: (cb: () => void) => void
       // 真实连接核心
@@ -259,6 +262,8 @@ export function initDesktopBridge() {
     subscriptionFetch: (url) => invoke<SubNode[]>('subscription_fetch', { url }),
     subscriptionParse: (content) => invoke<SubNode[]>('subscription_parse', { content }),
     notifyStatus: (connected) => invoke<void>('notify_status', { connected }),
+    // 广告拦截清单信息（条数 + 样例），规则页展示用；以 Rust 里的清单为唯一来源
+    adBlockInfo: () => invoke<{ count: number; samples: string[] }>('ad_block_info'),
     // 前端完成断连后通知 Rust 主进程退出
     quit: () => invoke<void>('quit_ready'),
     onQuitRequest: (cb) => {
@@ -279,6 +284,7 @@ export function initDesktopBridge() {
         psiphon: net?.psiphon ?? false,
         psiphonRegion: net?.psiphonRegion ?? '',
         captureMode: net?.captureMode ?? 'proxy',
+        adBlock: net?.adBlock ?? false,
       }),
     coreStop: () => invoke<void>('core_stop'),
     coreCancelConnect: () => invoke<void>('core_cancel_connect'),

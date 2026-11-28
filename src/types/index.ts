@@ -131,6 +131,8 @@ export interface Settings {
   proxyMode: 'custom' | 'bypass-mainland' | 'global'
   domainDirect: string
   domainProxy: string
+  /** 广告拦截：内置广告/追踪域名一律 REJECT（改完需重连才写进核心配置） */
+  adBlock: boolean
   autoConnect: boolean
   autoStart: boolean
   rememberPage: boolean

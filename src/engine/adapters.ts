@@ -169,6 +169,7 @@ export class DesktopAdapter implements EngineAdapter {
         psiphon: opts.psiphon ?? false,
         psiphonRegion: opts.settings.psiphonRegion ?? '',
         captureMode: opts.settings.captureMode,
+        adBlock: opts.settings.adBlock,
       },
       picked,
     ) as CoreResult

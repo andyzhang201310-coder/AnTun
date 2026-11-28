@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: Settings = {
   proxyMode: 'custom',
   domainDirect: '',
   domainProxy: '',
+  adBlock: true,
   autoConnect: false,
   autoStart: false,
   rememberPage: true,

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ShieldCheck, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ShieldCheck, ShieldOff, Plus, Trash2 } from 'lucide-react'
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Segment, Toggle } from '../components/ui'
@@ -15,11 +15,43 @@ export function RulesPage() {
   const [type, setType] = useState<Rule['type']>('DOMAIN-SUFFIX')
   const [value, setValue] = useState('')
   const [policy, setPolicy] = useState<Rule['policy']>('WARP')
+  // 广告拦截清单以 Rust 侧为唯一来源，这里只取条数和样例做展示
+  const [adInfo, setAdInfo] = useState<{ count: number; samples: string[] } | null>(null)
+
+  useEffect(() => {
+    const desk = (window as any).AnTunDesktop
+    if (!desk?.adBlockInfo) return
+    desk.adBlockInfo().then(setAdInfo).catch(() => setAdInfo(null))
+  }, [])
 
   const custom = rules.filter((r) => !r.builtin)
 
   return (
     <div className="page-wrap fade-in stack">
+      {/* 广告拦截：与分流模式无关，始终在 MATCH 之前把清单域名判成 REJECT */}
+      <Card
+        title={<><ShieldOff size={16} />{t('adBlockTitle')}</>}
+        sub={adInfo ? tr('adBlockCount', settings.lang, { n: adInfo.count }) : undefined}
+      >
+        <div className="field-row">
+          <Toggle checked={settings.adBlock} onChange={(v) => store.setSetting('adBlock', v)} />
+          <div className="field-label">
+            <div className="t">{t('adBlockOn')}</div>
+            <div className="d">{t('adBlockDesc')}</div>
+          </div>
+          <span className={`badge ${settings.adBlock ? 'badge-green' : 'badge-gray'}`}>
+            {t(settings.adBlock ? 'on' : 'off')}
+          </span>
+        </div>
+        {adInfo && adInfo.samples.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {adInfo.samples.map((d) => (
+              <span key={d} className="badge badge-gray mono" style={{ fontSize: 10 }}>{d}</span>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card title={<><ShieldCheck size={16} />{t('proxyMode')}</>}>
         <Segment
           value={settings.proxyMode}
