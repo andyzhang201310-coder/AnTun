@@ -143,6 +143,23 @@ pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
+/// 核心链路专用：在隐藏窗口之外，还要剥掉外部代理软件写进环境的
+/// HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY 等变量。
+/// 这些变量会污染 mihomo 的 DoH、出口探测的 curl、Psiphon 与节点测速，
+/// 表现为「同样的配置有时连得上、有时连不上」。核心一律用显式参数，不继承系统代理。
+/// 注意：下载 mihomo 核心 / 更新包这类命令不要用这个函数——它们可能需要系统代理才能出网，
+/// 应继续用 hidden_command。core_update.rs 自带独立的 hidden_command，不受影响。
+pub(crate) fn proxy_free_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = hidden_command(program);
+    for k in [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    ] {
+        cmd.env_remove(k);
+    }
+    cmd
+}
+
 pub(crate) fn app_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -624,7 +641,14 @@ fn render_config(
     let dns_rules = if dns_block.is_empty() {
         String::new()
     } else {
-        String::from("  - IP-CIDR,1.1.1.1/32,PROXY\n  - IP-CIDR,8.8.8.8/32,PROXY\n")
+        // 解析器流量跟随隧道（与 1.7.1 一致）。
+        // 1.7.8 中途曾把 1.1.1.1 / 8.8.8.8 强制 DIRECT 以避免「DNS 自举死锁」，
+        // 但在 1.1.1.1 被封锁的网络里，DoH 直连必然超时：即使 WG 隧道已经建立，
+        // 也解析不了 www.cloudflare.com 去做 trace，最终被误判成「隧道未建立」。
+        // 2026-11-28 本机实测：1.1.1.1 / 8.8.8.8 的 UDP 与 DoH 均不可达，
+        // 而 1.7.1（解析器走隧道）可正常连接。握手走 IP 端点、不依赖 DNS，
+        // 隧道起来后 PROXY DNS 即可用，不存在真正的死锁。
+        String::new()
     };
     // 订阅节点作为最终出口时，WARP 只作为前置（可选）
     let node_exit = front_config.is_some() && sub_exit == "node";
@@ -1141,7 +1165,7 @@ fn attempt_connect(
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写配置: {}", e))?;
 
     // 4. 启动前先校验配置，配置非法直接返回具体错误（避免"正在连接"卡死）
-    if let Ok(check) = hidden_command(&exe)
+    if let Ok(check) = proxy_free_command(&exe)
         .args(["-t", "-f", cfg_path.to_string_lossy().as_ref()])
         .output()
     {
@@ -1155,7 +1179,7 @@ fn attempt_connect(
     if is_cancelled(app) {
         return Err(CANCELLED.into());
     }
-    let child = hidden_command(&exe)
+    let child = proxy_free_command(&exe)
         .args(["-f", cfg_path.to_string_lossy().as_ref()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1217,38 +1241,20 @@ fn attempt_connect(
         }
     }
 
-    // 超时：停掉核心并返回真实原因，交由上层决定是否用内置凭证回退
+    // 超时：停掉核心并返回原因。
+    // 不再武断断言「网络阻断了 WARP 的 UDP 出站」：本机网络可能完全支持 WARP 直连，
+    // 超时更多来自端点临时不可达、探测窗口内隧道尚未就绪、或 DNS 解析被旧配置拖累。
+    // 这类情况重试一次往往就能连上，所以只给中性、可操作的建议。
     stop_child(state);
-    // 区分「隧道没建成」和「本机根本连不上 Cloudflare」。
-    // 前者在实测中几乎都是 UDP 出站被网络阻断（WARP 走 2408/QUIC），
-    // 此时唯一可行的出路是 Psiphon 出口，直接把这条建议写进错误里，
-    // 用户不用去翻日志猜。
-    let hint = if a.front_config.is_none() && !a.psiphon {
-        if probe_cloudflare_direct() {
-            "；本机可以访问 Cloudflare，但 WARP 隧道没有建立，多半是网络阻断了 WARP 的 UDP 出站。可开启 Psiphon 出口后重试"
-        } else {
-            "；本机无法访问 Cloudflare，请检查网络或 DNS"
-        }
+    let head = if a.psiphon {
+        "Psiphon 出口连接超时"
     } else {
-        ""
+        "WARP 连接超时"
     };
     Err(format!(
-        "连接超时：{}{}（请确认 WARP 凭证有效，且当前网络可访问 Cloudflare）",
-        last_err, hint
+        "{}：{}。建议重试一次或换一个端点；若反复失败再检查 WARP 凭证，或临时启用 Psiphon 出口。",
+        head, last_err
     ))
-}
-
-/// 不经代理直连 Cloudflare trace，判断「本机能否访问 Cloudflare」。
-/// 只用于失败后的诊断：成功与否都不影响连接结果，所以任何异常都按不可达处理。
-fn probe_cloudflare_direct() -> bool {
-    hidden_command("curl.exe")
-        .args([
-            "-s", "-o", "NUL", "--max-time", "4",
-            "https://www.cloudflare.com/cdn-cgi/trace",
-        ])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// 通过本地代理真实探测出口（这是判断"已连接"的唯一依据）
@@ -1259,7 +1265,7 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
     let t0 = SystemTime::now();
 
     // 1. Cloudflare trace：经隧道请求，返回 ip= / loc= 字段
-    let trace = hidden_command("curl.exe")
+    let trace = proxy_free_command("curl.exe")
         .args([
             "-s", "--max-time", "8", "-x", proxy_url,
             "-w", "\n__ANTUN_MS__%{time_total}",
@@ -1291,7 +1297,7 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
     }
 
     // 2. 二次确认：gstatic 204（YouTube 系服务，能通即证明可访问外网）
-    let check = hidden_command("curl.exe")
+    let check = proxy_free_command("curl.exe")
         .args([
             "-s", "-o", "NUL", "-w", "%{http_code}", "--max-time", "8",
             "-x", proxy_url, "http://www.gstatic.com/generate_204",
@@ -1336,7 +1342,7 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
 /// 避免 Cloudflare trace 被限速或网络抖动时把可用隧道误判为断开。
 fn probe_alive(proxy_url: &str) -> Result<u32, String> {
     let t0 = SystemTime::now();
-    let out = hidden_command("curl.exe")
+    let out = proxy_free_command("curl.exe")
         .args([
             "-s", "-o", "NUL", "-w", "%{http_code}", "--max-time", "6",
             "-x", proxy_url, "http://www.gstatic.com/generate_204",

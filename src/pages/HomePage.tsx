@@ -188,7 +188,16 @@ export function HomePage() {
     await reconnectIfNeeded(t('psiphonSwitching'))
   }
 
-  /** 连接失败后的一键补救：改用 Psiphon 出口重连（失败原因常是本机到 Cloudflare 的 UDP 被阻断） */
+  /** 连接失败后按当前设置原样重试：超时多为端点临时不可达，重试一次常常就通 */
+  const retryConnect = async () => {
+    if (switching || conn.connecting) return
+    store.setLastError('')
+    store.log('INFO', 'retry connect with current settings')
+    store.addHistory('retry connect', false)
+    await connect()
+  }
+
+  /** 备选：多次重试仍失败时，用户可主动切到 Psiphon 出口重连 */
   const retryWithPsiphon = async () => {
     if (switching || conn.connecting) return
     store.setSetting('psiphon', true)
@@ -315,16 +324,26 @@ export function HomePage() {
                 <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 2 }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ wordBreak: 'break-word' }}>{lastError}</div>
-                  {settings.connMode === 'warp' && !settings.psiphon && (
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
                     <button
                       className="btn btn-ghost btn-sm"
-                      style={{ marginTop: 4, paddingLeft: 0 }}
+                      style={{ paddingLeft: 0 }}
                       disabled={switching}
-                      onClick={() => void retryWithPsiphon()}
+                      onClick={() => void retryConnect()}
                     >
-                      {t('tryPsiphon')}
+                      {t('retryConnect')}
                     </button>
-                  )}
+                    {settings.connMode === 'warp' && !settings.psiphon && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ paddingLeft: 0 }}
+                        disabled={switching}
+                        onClick={() => void retryWithPsiphon()}
+                      >
+                        {t('tryPsiphon')}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

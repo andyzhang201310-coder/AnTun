@@ -359,7 +359,7 @@ fn attempt_once(
     let out = std::fs::File::create(&log).map_err(|e| Fail::Fatal(format!("create psiphon log: {}", e)))?;
     let err = out.try_clone().map_err(|e| Fail::Fatal(format!("clone log handle: {}", e)))?;
 
-    let child = crate::core::hidden_command(&exe)
+    let child = crate::core::proxy_free_command(&exe)
         .args(["-config", cfg.to_string_lossy().as_ref()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(out))

@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::core::{
-    cred_path, fill_defaults, hidden_command, WarpCredential, BUILTIN_INNER_HOST, BUILTIN_INNER_KEY,
+    cred_path, fill_defaults, proxy_free_command, WarpCredential, BUILTIN_INNER_HOST, BUILTIN_INNER_KEY,
     BUILTIN_MASQUE_KEY, BUILTIN_MASQUE_PEER, BUILTIN_OUTER_KEY,
 };
 
@@ -106,7 +106,7 @@ fn register_once() -> Result<Registered, String> {
         "type": "Windows",
         "locale": "en_US",
     });
-    let out = hidden_command("curl.exe")
+    let out = proxy_free_command("curl.exe")
         .args([
             "-s",
             "-m",

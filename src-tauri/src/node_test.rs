@@ -4,7 +4,7 @@
 //! （`listeners[].proxy` 强制走指定出站），再用 curl 多线程并发测延迟/下载速度。
 //! 与主隧道完全隔离：不连接也能测，测速不会影响已建立的连接和系统代理。
 
-use crate::core::{app_dir, download_core, hidden_command};
+use crate::core::{app_dir, download_core, proxy_free_command};
 use crate::subscription::SubNode;
 use serde::Serialize;
 use std::net::{TcpListener, TcpStream};
@@ -152,7 +152,7 @@ fn config_ok(exe: &Path, dir: &Path, cfg: &str) -> bool {
     if std::fs::write(&path, cfg).is_err() {
         return false;
     }
-    let out = hidden_command(exe)
+    let out = proxy_free_command(exe)
         .args(["-t", "-f", path.to_string_lossy().as_ref(), "-d", dir.to_string_lossy().as_ref()])
         .output();
     let ok = out.as_ref().map(|o| o.status.success()).unwrap_or(false);
@@ -222,7 +222,7 @@ fn group_delay(api_port: u16, timeout_ms: u32) -> Result<std::collections::HashM
     );
     // 整组结束时间晚于单个节点的超时，留足余量
     let max_time = (timeout_ms / 1000 + 20).to_string();
-    let out = hidden_command("curl.exe")
+    let out = proxy_free_command("curl.exe")
         .args(["-sS", "--max-time", &max_time, &url])
         .output()
         .map_err(|e| format!("curl 启动失败: {}", e))?;
@@ -235,7 +235,7 @@ fn group_delay(api_port: u16, timeout_ms: u32) -> Result<std::collections::HashM
 }
 
 fn curl_speed_url(port: u16, seconds: u32, url: &str) -> (u64, u64, String) {
-    let out = hidden_command("curl.exe")
+    let out = proxy_free_command("curl.exe")
         .args([
             "-sS",
             "-o",
@@ -355,7 +355,7 @@ pub async fn node_test_start(
     let cfg_path = base.join("config.yaml");
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写测速配置失败: {}", e))?;
 
-    let child = hidden_command(&exe)
+    let child = proxy_free_command(&exe)
         .args([
             "-f",
             cfg_path.to_string_lossy().as_ref(),

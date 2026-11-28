@@ -8,7 +8,7 @@
 //!
 //! 两条路径都不碰主隧道、不改系统代理。
 
-use crate::core::{app_dir, download_core, hidden_command, WarpCredential};
+use crate::core::{app_dir, download_core, proxy_free_command, WarpCredential};
 use crate::wg_handshake;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -107,7 +107,7 @@ fn group_delay(api_port: u16, timeout_ms: u32) -> Result<HashMap<String, i64>, S
     );
     // 整组可能在最后一个代理的超时之后才返回，给足余量
     let max_time = (timeout_ms / 1000 + 15).to_string();
-    let out = hidden_command("curl.exe")
+    let out = proxy_free_command("curl.exe")
         .args(["-sS", "--max-time", &max_time, &url])
         .output()
         .map_err(|e| format!("curl 启动失败: {}", e))?;
@@ -141,7 +141,7 @@ fn group_probe_with_exe(
     let cfg_path = dir.join("config.yaml");
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写探测配置失败: {}", e))?;
 
-    let mut child: Child = hidden_command(exe)
+    let mut child: Child = proxy_free_command(exe)
         .args([
             "-f",
             cfg_path.to_string_lossy().as_ref(),
