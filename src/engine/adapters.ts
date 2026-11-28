@@ -206,8 +206,14 @@ export class DesktopAdapter implements EngineAdapter {
       endpoint: used,
       exitIp: result.exitIp,
       country: result.country,
-      colo: result.colo || 'WARP',
+      // 机房代码来自 Cloudflare 边缘；订阅节点（frontConfig）在「出口复核」判定出
+      // 分叉后会把它清空（边缘 LAX 配香港落地会自相矛盾），这里不能再兜底成 WARP
+      colo: result.colo || (opts.frontConfig ? '' : 'WARP'),
       city: result.city,
+      isp: result.isp || '',
+      rotating: !!result.rotating,
+      split: !!result.split,
+      exitSamples: result.samples || [],
       latency: result.latency,
       up: 0,
       down: 0,
@@ -252,6 +258,10 @@ export class DesktopAdapter implements EngineAdapter {
       country: r.country,
       colo: r.colo,
       city: r.city,
+      isp: r.isp || '',
+      rotating: !!r.rotating,
+      split: !!r.split,
+      exitSamples: r.samples || [],
       latency: r.latency,
       up: 0, down: 0, upRate: 0, downRate: 0, startedAt: null, session: 'WARP',
     }

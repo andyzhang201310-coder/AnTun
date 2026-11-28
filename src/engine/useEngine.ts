@@ -16,6 +16,8 @@ let engineAdapter: EngineAdapter | null = null
 // 所以用模块级的 in-flight 标记挡住重入，等真正的 Promise 结束才放开。
 let connectInFlight = false
 let cancelRequested = false
+/** 出口信息补探的互斥：连接时探测失败后由健康检查补一次，避免反复发起 */
+let exitRefreshing = false
 
 function ensureAdapter(): EngineAdapter {
   const s = useStore.getState()
@@ -159,7 +161,31 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
         useLive.getState().resetLive()
         useStore.getState().setLastError('')
         ;(window as any)._antunSyncTray?.()
-        adapter.probe((p) => useLive.getState().pushLatency(p))
+        adapter.probe((p) => {
+          useLive.getState().pushLatency(p)
+          // 连接时那一次出口探测若刚好失败（trace 被限速、节点抖动），
+          // 首页会一直显示「出口 IP —」直到下次重连。这里补探，成功即回填。
+          const cur = useStore.getState()
+          if (!exitRefreshing && cur.conn.connected && !cur.conn.exitIp) {
+            exitRefreshing = true
+            adapter.status()
+              .then((r) => {
+                if (!r.exitIp) return
+                useStore.getState().setConn({
+                  exitIp: r.exitIp,
+                  country: r.country || cur.conn.country,
+                  colo: r.colo,
+                  city: r.city,
+                  isp: r.isp || cur.conn.isp,
+                  rotating: !!r.rotating,
+                  split: !!r.split,
+                  exitSamples: r.exitSamples || [],
+                })
+              })
+              .catch(() => { /* 下一次健康检查再试 */ })
+              .finally(() => { exitRefreshing = false })
+          }
+        })
         if (ep) {
           s.log('INFO', `${pinned ? 'pinned' : 'auto select'} endpoint -> ${ep.host}:${ep.port}${ep.latency ? ` (${ep.latency}ms)` : ''}`)
         }
@@ -316,7 +342,6 @@ async function pollTraffic() {
   const s = useStore.getState()
   if (!s.conn.connected) return
   trafficBusy = true
-  const now = Date.now()
   try {
     const adapter = engineAdapter
     let up = trafficRef.up
@@ -336,14 +361,16 @@ async function pollTraffic() {
       up += Math.floor(Math.random() * 9000)
       down += Math.floor(Math.random() * 60000)
     }
+    // 时间戳必须取「数据到达」的时刻，不能取发请求的时刻：
+    // 核心 /traffic 是长连接流，每次读到下一拍要等 0~1 秒，延迟抖动很大。
+    // 用发请求的时刻做分母，会把「读得慢的那一次」算成 2 秒间隔，
+    // 而分子其实只有 1 秒的字节数 —— 速率被腰斩（实测 4.0 MB/s 显示 1.8 MB/s）。
+    const now = Date.now()
     const prev = trafficRef
-    let smoothUp = rateRef.up
-    let smoothDown = rateRef.down
-    if (directUpRate !== undefined && directDownRate !== undefined) {
-      // mihomo /traffic 直接给出每秒速率，这里只做轻微平滑
-      smoothUp = smoothUp * 0.35 + directUpRate * 0.65
-      smoothDown = smoothDown * 0.35 + directDownRate * 0.65
-    } else if (!prev.initialized) {
+    let rateUp = rateRef.up
+    let rateDown = rateRef.down
+    if (!prev.initialized) {
+      // 首帧只记基线：累计值本身是历史总量，直接当速率会显示一个天文数字
       trafficRef.up = up
       trafficRef.down = down
       trafficRef.t = now
@@ -352,23 +379,35 @@ async function pollTraffic() {
       rateRef.down = 0
       useLive.getState().setTraffic({ up, down, upRate: 0, downRate: 0 })
       return
-    } else {
-      const elapsed = Math.min(5, Math.max(0.5, (now - prev.t) / 1000))
-      const instantUp = Math.max(0, up - prev.up) / elapsed
-      const instantDown = Math.max(0, down - prev.down) / elapsed
-      smoothUp = smoothUp * 0.5 + instantUp * 0.5
-      smoothDown = smoothDown * 0.5 + instantDown * 0.5
     }
-    rateRef.up = smoothUp
-    rateRef.down = smoothDown
+    // 用累计字节数除以真实间隔，而不是直接采用核心每秒推的增量：
+    // 采样是「每秒新开一条连接读一行」，慢帧时会漏掉整拍（那一拍只能显示 0），
+    // 累计差 / 实际间隔既不漏字节也不会凭空补字节。
+    // 之前这里是 0.35/0.65 的指数平滑，实测把 1.3 MB/s 的突发压到 0.36 MB/s，
+    // 停流后还要 8 秒才归零，看起来像「速率不准」。
+    const advanced = up >= prev.up && down >= prev.down && (up > prev.up || down > prev.down)
+    if (advanced) {
+      const elapsed = Math.min(5, Math.max(0.4, (now - prev.t) / 1000))
+      rateUp = (up - prev.up) / elapsed
+      rateDown = (down - prev.down) / elapsed
+    } else if (directUpRate !== undefined && directDownRate !== undefined) {
+      // 累计值回退（核心重启）时退回核心给的速率
+      rateUp = directUpRate
+      rateDown = directDownRate
+    } else {
+      rateUp = 0
+      rateDown = 0
+    }
+    rateRef.up = rateUp
+    rateRef.down = rateDown
     trafficRef.up = up
     trafficRef.down = down
     trafficRef.t = now
     trafficRef.initialized = true
     useLive.getState().setTraffic({
       up, down,
-      upRate: Math.round(smoothUp),
-      downRate: Math.round(smoothDown),
+      upRate: Math.round(rateUp),
+      downRate: Math.round(rateDown),
     })
   } catch {
     /* 单次读取失败保持上一次数值，下一轮再试 */

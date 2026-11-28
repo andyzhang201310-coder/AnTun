@@ -539,6 +539,7 @@ export function SettingsPage() {
         } />
         <FieldRow
           title={t('psiphon')}
+          disabled={s.connMode === 'subscription' || psiphonBusy}
           desc={
             s.connMode === 'subscription' ? t('psiphonSubOnly')
               : psiphonBusy ? t('psiphonSwitching')
@@ -550,6 +551,7 @@ export function SettingsPage() {
             <Toggle
               checked={s.psiphon}
               disabled={s.connMode === 'subscription' || psiphonBusy}
+              title={s.connMode === 'subscription' ? t('psiphonSubOnly') : undefined}
               onChange={(v) => void togglePsiphon(v)}
             />
           }

@@ -91,6 +91,14 @@ export interface ConnState {
   downRate: number     // bytes per second
   startedAt: number | null
   session: string      // 例如 "AWG" / "AWG-Psiphon"
+  /** 出口网络归属（ASN + 运营商）：出口 IP 会轮换的节点，这是唯一稳定的对照项 */
+  isp?: string
+  /** 同一目标连问两次 IP 不同 → 出口由服务端池化分配，每次连接可能不同 */
+  rotating?: boolean
+  /** 不同目标看到的出口不同 → 节点按目标分流（CF 前置站点走 proxyIP 等） */
+  split?: boolean
+  /** 本次采样到的出口 IP（去重），rotating 时给用户看采样证据 */
+  exitSamples?: string[]
 }
 
 /** 用户设置（对应原版 settings.json，全部功能项） */

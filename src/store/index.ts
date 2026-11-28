@@ -403,8 +403,12 @@ interface LiveStore {
   upRate: number
   downRate: number
   latencyPoints: LatencyPoint[]
-  /** 每秒一帧的上下行速率，用于波形图（约 1 分钟窗口） */
-  ratePoints: { t: number; up: number; down: number }[]
+  /**
+   * 每秒一帧的上下行速率，用于波形图（约 1 分钟窗口）。
+   * upTotal/downTotal 是该帧当时的累计字节数：采样间隔抖动时用它算窗口均值，
+   * 比直接平均每秒速率更准（漏读一拍也不会把均值算低）。
+   */
+  ratePoints: { t: number; up: number; down: number; upTotal: number; downTotal: number }[]
   /** 当前经过隧道的连接（首页「连接设备」），约 2 秒刷新一次 */
   conns: ConnEntry[]
   /** 每秒心跳：即使读取流量失败，首页的会话时长也能继续走字 */
@@ -426,7 +430,7 @@ export const useLive = create<LiveStore>()((set) => ({
   tick: 0,
   setTraffic: (t) => set((s) => ({
     ...t,
-    ratePoints: [...s.ratePoints.slice(-89), { t: Date.now(), up: t.upRate, down: t.downRate }],
+    ratePoints: [...s.ratePoints.slice(-89), { t: Date.now(), up: t.upRate, down: t.downRate, upTotal: t.up, downTotal: t.down }],
   })),
   pushLatency: (p) => set((s) => ({ latencyPoints: [...s.latencyPoints.slice(-59), p] })),
   setConns: (conns) => set({ conns }),

@@ -1,4 +1,5 @@
 mod adblock;
+mod appicon;
 mod core;
 mod core_update;
 mod credential;
@@ -154,6 +155,7 @@ pub fn run() {
             node_test::node_test_stop,
             net_diag::net_diagnose,
             adblock::ad_block_info,
+            appicon::app_icon,
             sync::sync_share_start,
             sync::sync_share_stop,
             sync::sync_share_status,

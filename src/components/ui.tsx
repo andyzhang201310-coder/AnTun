@@ -15,8 +15,8 @@ export function Card({ title, sub, icon, children, className = '', style }: {
   )
 }
 
-export function Toggle({ checked, onChange, disabled }: {
-  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean
+export function Toggle({ checked, onChange, disabled, title }: {
+  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string
 }) {
   return (
     <button
@@ -24,17 +24,18 @@ export function Toggle({ checked, onChange, disabled }: {
       className={`switch ${checked ? 'on' : ''}`}
       onClick={() => onChange(!checked)}
       disabled={disabled}
+      title={title}
       aria-pressed={checked}
       role="switch"
     />
   )
 }
 
-export function FieldRow({ title, desc, control }: {
-  title: string; desc?: string; control: ReactNode
+export function FieldRow({ title, desc, control, disabled }: {
+  title: string; desc?: string; control: ReactNode; disabled?: boolean
 }) {
   return (
-    <div className="field-row">
+    <div className={`field-row ${disabled ? 'is-disabled' : ''}`}>
       <div className="field-label">
         <div className="t">{title}</div>
         {desc && <div className="d">{desc}</div>}
@@ -291,11 +292,11 @@ export function FlagSelect({ groups, value, onChange, disabled, empty, lang = 'z
   )
 }
 
-export function Stat({ label, value, sub, color }: {
-  label: string; value: ReactNode; sub?: string; color?: string
+export function Stat({ label, value, sub, color, title }: {
+  label: string; value: ReactNode; sub?: string; color?: string; title?: string
 }) {
   return (
-    <div className="card" style={{ padding: '14px 18px' }}>
+    <div className="card" style={{ padding: '14px 18px' }} title={title}>
       <div className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase' }}>{label}</div>
       <div className="strong mono" style={{ fontSize: 18, marginTop: 6, color: color || 'var(--text)' }}>{value}</div>
       {sub && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{sub}</div>}

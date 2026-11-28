@@ -115,6 +115,20 @@ pub struct CoreResult {
     pub endpoint_host: String,
     #[serde(default)]
     pub endpoint_port: u16,
+    /// 出口网络归属（ASN + 运营商），例如 "AS13335 Cloudflare, Inc."
+    /// 出口 IP 会轮换的节点，ASN 是唯一稳定的对照项：测速站和本机看到不同 IP
+    /// 但 ASN 相同，就说明是同一张出口网络，不是探测错了。
+    #[serde(default)]
+    pub isp: String,
+    /// 同一目标连问两次 IP 不同 → 出口池在轮换
+    #[serde(default)]
+    pub rotating: bool,
+    /// 不同目标看到的出口不同 → 节点按目标分流（CF 前置站点走 proxyIP 等）
+    #[serde(default)]
+    pub split: bool,
+    /// 本次采样到的出口 IP（去重，最多 3 个），给用户看"确实每次不一样"
+    #[serde(default)]
+    pub samples: Vec<String>,
 }
 
 impl CoreResult {
@@ -1851,25 +1865,169 @@ fn probe_exit(proxy_url: &str) -> Result<CoreResult, String> {
         SystemTime::now().duration_since(t0).unwrap_or_default().as_millis() as u32
     };
 
+    // colo= 是 Cloudflare 边缘机房代码（NRT / HKG / LAX …），
+    // 之前误把 warp=on 写进了这里，导致界面显示「CN · WARP on」；
+    // 现在如实返回机房代码，只有拿不到时才退回 WARP 标记。
+    let colo_code = if !colo.trim().is_empty() {
+        colo.trim().to_string()
+    } else if warp == "on" || warp == "plus" {
+        "WARP".into()
+    } else {
+        String::new()
+    };
+
+    // 3. 复核「普通网站看到的出口」，并判断它稳不稳定
+    //
+    // trace 用的是 Cloudflare 自家域名：CF Worker 型节点对 Cloudflare 目标走 proxyIP、
+    // 对普通站点走另一条出网，两条路径的出口完全不同（实测同一节点：
+    // cloudflare.com → 64.83.29.200 US，普通站点 → 104.28.x）。只报 trace 的 IP，
+    // 会给出一个用户实际访问网站时不会出现的地址。
+    let probe = probe_exit_samples(proxy_url);
+    let isp = probe.primary.as_ref().map(|s| s.isp.clone()).unwrap_or_default();
+    let (ip, loc, city, colo) = match probe.primary.as_ref() {
+        Some(p) if !p.ip.is_empty() && p.ip != ip => (
+            p.ip.clone(),
+            if p.country.is_empty() { loc } else { p.country.clone() },
+            p.city.clone(),
+            // 边缘机房代码与真实落地不在同一地区，留着会误导（US·LAX 配 HK 出口）；
+            // 出口在轮换/分流时，这一个 colo 只是其中一次采样，同样不该当成结论
+            String::new(),
+        ),
+        _ => (
+            ip,
+            loc,
+            String::new(),
+            if probe.rotating || probe.split { String::new() } else { colo_code },
+        ),
+    };
+
     Ok(CoreResult {
         ok: true,
         exit_ip: ip,
         country: loc,
-        city: String::new(),
-        // colo= 是 Cloudflare 边缘机房代码（NRT / HKG / LAX …），
-        // 之前误把 warp=on 写进了这里，导致界面显示「CN · WARP on」；
-        // 现在如实返回机房代码，只有拿不到时才退回 WARP 标记。
-        colo: if !colo.trim().is_empty() {
-            colo.trim().to_string()
-        } else if warp == "on" || warp == "plus" {
-            "WARP".into()
-        } else {
-            String::new()
-        },
+        city,
+        colo,
         latency,
         error: String::new(),
+        isp,
+        rotating: probe.rotating,
+        split: probe.split,
+        samples: probe.samples,
         ..Default::default()
     })
+}
+
+/// 一次「中立站点」采样。带归属信息的源会填 isp，纯回显源只给 IP。
+#[derive(Default, Clone, Debug)]
+struct ExitSample {
+    ip: String,
+    country: String,
+    city: String,
+    isp: String,
+}
+
+fn curl_text(proxy_url: &str, timeout: &str, url: &str) -> Option<String> {
+    let out = proxy_free_command("curl.exe")
+        .args(["-s", "--max-time", timeout, "-x", proxy_url, url])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// 按 IP 反查归属：ip-api 支持 /json/<ip>，不依赖请求本身走哪条路。
+/// 这样「出口 IP」由 HTTPS 回显源决定（和普通网站同一条路），归属再按这个 IP 查，
+/// 两者一定是对同一个地址的描述。
+fn geo_by_ip(proxy_url: &str, ip: &str) -> Option<ExitSample> {
+    let url = format!(
+        "http://ip-api.com/json/{}?fields=status,countryCode,city,as,isp",
+        ip
+    );
+    let text = curl_text(proxy_url, "5", &url)?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if v.get("status").and_then(|s| s.as_str()) != Some("success") {
+        return None;
+    }
+    let pick = |k: &str| v.get(k).and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let isp = {
+        let a = pick("as");
+        if a.is_empty() { pick("isp") } else { a }
+    };
+    Some(ExitSample { ip: ip.to_string(), country: pick("countryCode"), city: pick("city"), isp })
+}
+
+/// 纯回显源：只要 IP，用来判断「同一时刻不同站点看到的出口是否一致」。
+fn sample_plain(proxy_url: &str, url: &str) -> Option<ExitSample> {
+    let text = curl_text(proxy_url, "5", url)?;
+    let ip = text.lines().next().unwrap_or("").trim().to_string();
+    // 只接受像 IP 的响应，避免把错误页当 IP
+    if ip.is_empty() || ip.len() > 45 || !ip.chars().all(|c| c.is_ascii_hexdigit() || c == '.' || c == ':') {
+        return None;
+    }
+    Some(ExitSample { ip, ..Default::default() })
+}
+
+/// 一次出口探测的结论：主采样 + 两种"不稳定"的判定。
+#[derive(Debug)]
+struct ExitProbe {
+    /// 主采样（决定界面显示的 IP / 国家 / 城市 / ASN）
+    primary: Option<ExitSample>,
+    /// 去重后的采样 IP（最多 3 个），给用户看"确实不一样"
+    samples: Vec<String>,
+    /// 同一目标两次采样不同 → 出口在轮换
+    rotating: bool,
+    /// 不同目标看到不同出口 → 节点按目标分流（CF 前置站点走 proxyIP 之类）
+    split: bool,
+}
+
+/// 采样策略：同一个目标问两次 + 另一个目标问一次。
+///
+/// 为什么要分两个维度：
+/// - **轮换**：同一个站点（AWS）连问两次拿到不同 IP。这类节点（CF Worker + WARP 出口池）
+///   每次 TCP 连接都由服务端随机分配出口，用户拿 ping0.cc 对照必然对不上。
+/// - **分流**：不同站点看到不同出口。Cloudflare 前置的站点（如 api.ip.sb）常被
+///   proxyIP 接管，而普通站点走另一条出网，两者 IP 天然不同，这是节点设计如此。
+/// 两者都不是"探测失败"，但用户看到的现象一样（和测速站不一致），所以都要如实标注。
+fn probe_exit_samples(proxy_url: &str) -> ExitProbe {
+    let (a, b, c) = (proxy_url.to_string(), proxy_url.to_string(), proxy_url.to_string());
+    // AWS 的 checkip 不是 Cloudflare 前置，代表"普通 HTTPS 站点"看到的样子
+    let h1 = std::thread::spawn(move || sample_plain(&a, "https://checkip.amazonaws.com"));
+    let h2 = std::thread::spawn(move || sample_plain(&b, "https://checkip.amazonaws.com"));
+    // ip.sb 是 Cloudflare 前置，用来发现 proxyIP 分流
+    let h3 = std::thread::spawn(move || sample_plain(&c, "https://api.ip.sb/ip"));
+
+    let first = h1.join().ok().flatten();
+    let second = h2.join().ok().flatten();
+    let cf_fronted = h3.join().ok().flatten();
+
+    let rotating = match (&first, &second) {
+        (Some(x), Some(y)) => x.ip != y.ip,
+        _ => false,
+    };
+    // 主采样用第二次（时间上最接近现在）；一次都没成功就交回给 trace 的结果
+    let main_ip = second
+        .as_ref()
+        .map(|s| s.ip.clone())
+        .or_else(|| first.as_ref().map(|s| s.ip.clone()))
+        .or_else(|| cf_fronted.as_ref().map(|s| s.ip.clone()));
+
+    let split = match (&main_ip, &cf_fronted) {
+        (Some(m), Some(cf)) => cf.ip != *m,
+        _ => false,
+    };
+
+    let mut samples: Vec<String> = Vec::new();
+    for s in [&first, &second, &cf_fronted].into_iter().flatten() {
+        if !samples.iter().any(|x| x == &s.ip) {
+            samples.push(s.ip.clone());
+        }
+    }
+
+    let primary = main_ip.as_deref().and_then(|ip| geo_by_ip(proxy_url, ip));
+    ExitProbe { primary, samples, rotating, split }
 }
 
 /// 轻量存活探测：只发一次 generate_204，用最短时间判断隧道是否还能出网。
@@ -2046,6 +2204,27 @@ mod tests {
         let cfg = cfg_ad("off", true, "warp", false, "proxy", true);
         assert!(!cfg.contains("dns:\n"));
         assert!(cfg.contains("DOMAIN-SUFFIX,doubleclick.net,REJECT"));
+    }
+
+    /// 联网用例（默认忽略）：验证「同目标两次采样 / 跨目标分流」的判定真的能跑通。
+    /// 需要本机已有可用隧道（默认读 7890 混合端口）。
+    /// 跑法：cargo test --lib exit_samples_classify -- --ignored --nocapture
+    #[test]
+    #[ignore = "需要本机 7890 端口上有可用隧道"]
+    fn exit_samples_classify_local_proxy() {
+        let proxy = std::env::var("ANTUN_TEST_PROXY").unwrap_or_else(|_| "http://127.0.0.1:7890".into());
+        let probe = probe_exit_samples(&proxy);
+        println!("probe = {:?}", probe);
+        assert!(!probe.samples.is_empty(), "三路采样至少要有一个成功");
+        if let Some(p) = &probe.primary {
+            assert!(!p.ip.is_empty(), "主采样必须有 IP");
+            // 主采样的 IP 必须出现在采样列表里，否则界面会显示一个没被采样到的地址
+            assert!(probe.samples.iter().any(|s| s == &p.ip));
+        }
+        // 同一目标两次结果不同才算轮换；单次成功不应误判
+        if probe.samples.len() < 2 {
+            assert!(!probe.rotating);
+        }
     }
 
     #[test]

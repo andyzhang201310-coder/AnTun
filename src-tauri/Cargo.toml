@@ -1,6 +1,6 @@
 [package]
 name = "antun"
-version = "1.8.4"
+version = "1.8.6"
 description = "AnTun - lightweight cross-platform WARP client"
 authors = ["AnTun"]
 edition = "2021"
@@ -35,6 +35,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # 连接明细里的应用图标：枚举进程拿 exe 路径，抽图标位图再自己编码 PNG
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Graphics_Gdi",
 ] }
 
 [profile.release]

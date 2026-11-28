@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, AlertCircle, Check, MonitorSmartphone, AppWindow, ShieldAlert } from 'lucide-react'
+import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, AlertCircle, Check, MonitorSmartphone, ShieldAlert, Info } from 'lucide-react'
 import { useStore, useLive } from '../store'
 import type { ColoRecord } from '../store'
 import { useEngine, waitForConnectIdle } from '../engine/useEngine'
@@ -7,6 +7,7 @@ import { tr } from '../i18n'
 import { Card, Toggle, ProtocolSelect, FlagSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
 import type { FlagOption } from '../components/ui'
 import { Flag } from '../components/Flag'
+import { AppIcon } from '../components/AppIcon'
 import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
@@ -27,6 +28,25 @@ export function HomePage() {
   /** 是否以管理员身份运行：只在桌面端有意义，TUN 全局模式的前提 */
   const [elevated, setElevated] = useState(true)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
+
+  /**
+   * 近 30 秒平均速率：用窗口首尾的累计字节数算，不受采样抖动影响。
+   * 用户拿它和 YouTube / 测速站给的码率对照，才不会把「突发下载之间的空档」
+   * 当成「速率不准」——瞬时值和窗口均值本来就是两个口径。
+   */
+  const rateAvg = useMemo(() => {
+    const cutoff = Date.now() - 30000
+    const pts = ratePoints.filter((p) => p.t >= cutoff)
+    if (pts.length < 3) return null
+    const a = pts[0]
+    const b = pts[pts.length - 1]
+    const secs = (b.t - a.t) / 1000
+    if (secs < 5) return null
+    return {
+      up: Math.max(0, (b.upTotal - a.upTotal) / secs),
+      down: Math.max(0, (b.downTotal - a.downTotal) / secs),
+    }
+  }, [ratePoints])
 
   useEffect(() => {
     const d = (window as any).AnTunDesktop
@@ -476,9 +496,10 @@ export function HomePage() {
                 } />
               <FieldRow title={t('rescan')} desc={t('rescanDesc')}
                 control={<Toggle checked={settings.rescan} onChange={(v) => store.setSetting('rescan', v)} />} />
-              <FieldRow
-                title={t('psiphon')}
-                desc={
+            <FieldRow
+              title={t('psiphon')}
+              disabled={settings.connMode === 'subscription' || switching}
+              desc={
                   settings.connMode === 'subscription'
                     ? t('psiphonSubOnly')
                     : switching
@@ -493,6 +514,7 @@ export function HomePage() {
                   <Toggle
                     checked={settings.psiphon}
                     disabled={settings.connMode === 'subscription' || switching}
+                    title={settings.connMode === 'subscription' ? t('psiphonSubOnly') : undefined}
                     onChange={(v) => void togglePsiphon(v)}
                   />
                 }
@@ -514,10 +536,16 @@ export function HomePage() {
           conn.country ? (
             <span className="with-flag">
               <Flag code={conn.country} lang={settings.lang} globe={false} />
-              <span>{`${regionName(conn.country, settings.lang)} · ${conn.colo}`}</span>
+              <span>
+                {[
+                  regionName(conn.country, settings.lang),
+                  // 出口在轮换/分流时没有稳定的机房，标出来比写死一个 LAX 更诚实
+                  conn.colo || (conn.rotating ? t('exitRotating') : ''),
+                ].filter(Boolean).join(' · ')}
+              </span>
             </span>
           ) : '—'
-        } sub={conn.city} />
+        } sub={[conn.city, shortIsp(conn.isp)].filter(Boolean).join(' · ')} title={conn.isp} />
         <Stat
           label={t('vpnDevices')}
           value={conn.connected ? String(appCount) : '—'}
@@ -525,6 +553,22 @@ export function HomePage() {
           color={conn.connected ? 'var(--success)' : undefined}
         />
       </div>
+
+      {/* 出口说明：这类节点（CF Worker + WARP 出口池 / proxyIP 分流）本来就做不到
+          和测速站给出同一个 IP，与其让人以为探测错了，不如把采样摆出来 */}
+      {conn.connected && (conn.rotating || conn.split) && (
+        <div className="exit-rotate-note" title={conn.isp || undefined}>
+          <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            {t(
+              conn.rotating && conn.split ? 'exitRotateNoteBoth'
+                : conn.rotating ? 'exitRotateNoteRotate'
+                  : 'exitRotateNoteSplit',
+              { list: (conn.exitSamples || []).join(' / ') || '—' },
+            )}
+          </span>
+        </div>
+      )}
 
       {/* 连接明细：全宽表格，五列（应用 / 目标 / 规则 / 出口 / 流量）才放得下 */}
       <Card title={<><MonitorSmartphone size={16} />{t('connDetail')}</>}
@@ -542,7 +586,7 @@ export function HomePage() {
               {conns.slice(0, 30).map((c) => (
                 <div className="conn-row" key={c.id} title={`${c.process || t('connUnknownApp')} · ${c.sourceIp || '—'}`}>
                   <span className="cell conn-app">
-                    <AppWindow size={13} className="muted" />
+                    <AppIcon name={c.process} size={15} />
                     <span>{c.process || t('connUnknownApp')}</span>
                   </span>
                   <span className="cell mono" title={`${c.host}:${c.port}`}>{c.host}{c.port ? `:${c.port}` : ''}</span>
@@ -623,6 +667,7 @@ export function HomePage() {
               <div className="muted" style={{ fontSize: 11 }}><ArrowDownRight size={12} style={{ verticalAlign: 'middle' }} /> {t('downRate')}</div>
               <div className="strong mono" style={{ fontSize: 20, marginTop: 4, color: 'var(--brand)' }}>{formatRate(downRate)}</div>
               <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }}>{t('cumulative')} {formatBytes(down)}</div>
+              {rateAvg && <div className="muted mono" style={{ fontSize: 10, marginTop: 2 }} title={t('avg30Hint')}>{t('avg30')} {formatRate(Math.round(rateAvg.down))}</div>}
             </div>
           </div>
           <div className="rate-legend">
@@ -636,4 +681,16 @@ export function HomePage() {
       </Card>
     </div>
   )
+}
+
+/**
+ * "AS13335 Cloudflare, Inc." → "Cloudflare"
+ * 卡片副标题只放得下运营商名，ASN 留在 title 里给需要核对的人。
+ */
+function shortIsp(isp?: string): string {
+  if (!isp) return ''
+  return isp
+    .replace(/^AS\d+\s*/i, '')
+    .replace(/,?\s*(Inc\.?|LLC|Ltd\.?|Limited|Corp\.?|GmbH|S\.A\.)$/i, '')
+    .trim()
 }

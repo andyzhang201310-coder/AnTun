@@ -133,10 +133,20 @@ a { color: inherit; text-decoration: none; }
   border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .25s;
 }
 .switch.on::after { transform: translateX(18px); }
+/* 禁用态必须一眼看出来：此前 disabled 只挡住了点击、外观没变，
+   订阅模式下 Psiphon 看起来还是可开的，点上去没反应像 bug。
+   这里灰掉底色 + 手柄不再高亮 + 禁用光标，状态和“能不能点”一致。 */
+.switch:disabled { opacity: .3; cursor: not-allowed; }
+.switch:disabled.on { background: var(--border-strong); }
+.switch:disabled.on::after { background: rgba(255,255,255,.75); }
+.switch:disabled:hover { opacity: .3; }
 
 /* ============ 表单行 ============ */
 .field-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); }
 .field-row:last-child { border-bottom: none; }
+/* 整行禁用时标题和说明一起变淡，避免用户盯着可读的说明去找开关 */
+.field-row.is-disabled .t { opacity: .62; }
+.field-row.is-disabled .d { opacity: .55; }
 .field-label { flex: 1; min-width: 0; }
 .field-label .t { font-size: 13px; font-weight: 600; color: var(--text); }
 .field-label .d { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.4; }
@@ -280,6 +290,14 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid color-mix(in srgb, var(--warn) 24%, transparent);
 }
 .home-last-error .btn { color: var(--warn); }
+/* 出口轮换提示：和错误条区分开，用中性信息色，避免看起来像故障 */
+.exit-rotate-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 11.5px; line-height: 1.55; color: var(--text-2);
+  padding: 8px 11px; border-radius: 8px;
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 20%, transparent);
+}
 .home-node-pick-active {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding-top: 8px; border-top: 1px dashed var(--border);
@@ -320,8 +338,10 @@ a { color: inherit; text-decoration: none; }
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 11.5px;
 }
-.conn-row .conn-app { display: flex; align-items: center; gap: 6px; }
+.conn-row .conn-app { display: flex; align-items: center; gap: 7px; }
 .conn-row .conn-app span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 应用图标：exe 里抽出来的真实图标，尺寸固定不参与压缩，透明边缘不裁切 */
+.app-icon { flex: none; width: 15px; height: 15px; object-fit: contain; border-radius: 3px; }
 
 /* ============ 出口机房记录 ============ */
 .colo-row {

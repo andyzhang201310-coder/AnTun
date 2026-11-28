@@ -53,6 +53,14 @@ export interface CoreResult {
   /** 本次连接实际写入配置的出口端点 */
   endpointHost?: string
   endpointPort?: number
+  /** 出口网络归属（ASN + 运营商），如 "AS13335 Cloudflare, Inc." */
+  isp?: string
+  /** 同一目标连问两次 IP 不同 → 出口池在轮换 */
+  rotating?: boolean
+  /** 不同目标看到的出口不同 → 节点按目标分流 */
+  split?: boolean
+  /** 本次采样到的出口 IP（去重，最多 3 个） */
+  samples?: string[]
 }
 
 /** 单个 WARP 端点的真实探测结果 */
@@ -194,6 +202,8 @@ declare global {
       subscriptionParse: (content: string) => Promise<SubNode[]>
       notifyStatus: (connected: boolean) => Promise<void>
       adBlockInfo: () => Promise<{ count: number; samples: string[] }>
+      /** 进程图标：从 exe 里抽出来转成 PNG data URL，取不到返回 null */
+      appIcon: (process: string) => Promise<string | null>
       quit: () => Promise<void>
       onQuitRequest: (cb: () => void) => void
       // 真实连接核心
@@ -264,6 +274,8 @@ export function initDesktopBridge() {
     notifyStatus: (connected) => invoke<void>('notify_status', { connected }),
     // 广告拦截清单信息（条数 + 样例），规则页展示用；以 Rust 里的清单为唯一来源
     adBlockInfo: () => invoke<{ count: number; samples: string[] }>('ad_block_info'),
+    // 连接明细里的应用图标：Rust 侧从进程 exe 抽图标并编码成 PNG data URL
+    appIcon: (process) => invoke<string | null>('app_icon', { process }),
     // 前端完成断连后通知 Rust 主进程退出
     quit: () => invoke<void>('quit_ready'),
     onQuitRequest: (cb) => {
