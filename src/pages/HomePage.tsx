@@ -291,6 +291,16 @@ export function HomePage() {
     await reconnectIfNeeded()
   }
 
+  /** 圆环内副标题：会话时长 / 收尾 / 取消提示 / 空闲标语，四种状态共用一行，空间只有约 150px */
+  const ringSub = conn.connected && conn.startedAt
+    ? `${t('sessionClock')} ${formatDuration(Date.now() - conn.startedAt)}`
+    : cancelling
+      ? t('cancelPending')
+      : conn.connecting
+        // Psiphon 出口启动时先报这一步，再拼「点此取消」会超宽被省略号截断（英文尤其明显）
+        ? (settings.psiphon && settings.connMode === 'warp' ? t('psiphonStarting') : t('cancelHint'))
+        : t('ringIdle')
+
   return (
     <div className="page-wrap fade-in stack">
       {/* 连接主区：左列集中「连哪个节点」，右列是连接选项 */}
@@ -313,14 +323,8 @@ export function HomePage() {
                     ? t('cancelling')
                     : conn.connecting ? t('connecting') : t('connect')}
               </div>
-              <div className="muted mono" style={{ fontSize: 11, marginTop: 4 }}>
-                {conn.startedAt && conn.connected
-                  ? t('sessionClock') + ' ' + formatDuration(Date.now() - conn.startedAt)
-                  : cancelling
-                    ? t('cancelPending')
-                    : conn.connecting
-                      ? `${settings.psiphon && settings.connMode === 'warp' ? t('psiphonStarting') + ' · ' : ''}${t('cancelHint')}`
-                      : t('appTagline')}
+              <div className="muted connect-sub" style={{ marginTop: 4 }} title={ringSub}>
+                {ringSub}
               </div>
               {/* 连接过程中显示「已用时间」，连上后这一行让位给会话时长（上面那行） */}
               {conn.connecting && !cancelling && connectStart !== null && (

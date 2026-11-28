@@ -355,6 +355,12 @@ a { color: inherit; text-decoration: none; }
   box-shadow: inset 0 2px 12px rgba(24,39,75,.05);
 }
 .connect-ring .inner { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; }
+/* 圆环内副标题：文字必须留在圈内（英文文案比中文长），超宽时省略而不是溢出。
+   字号放这里而不是内联，窄屏才能跟着圆环一起缩小 */
+.connect-sub {
+  font-size: 11px; max-width: 150px; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 /* 连接中的「已用时间」：等宽数字避免 .1s → 1.1s 时整行抖动 */
 .connect-elapsed {
   margin-top: 7px;
@@ -451,6 +457,8 @@ a { color: inherit; text-decoration: none; }
   .topbar-controls .segment button { padding: 5px 8px; font-size: 11px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .connect-ring { width: 180px; height: 180px; }
+  /* 180px 的圆在下半部分只剩约 112px 弦宽，字号跟着缩一级才放得下英文 */
+  .connect-sub { max-width: 116px; font-size: 10px; }
   .node-row, .table-head { grid-template-columns: 1.4fr 1fr .7fr auto; }
   .node-row .cell.hide-sm, .table-head .hide-sm { display: none; }
   /* 手机上连接明细只留「应用 / 目标 / 流量」三列 */
@@ -468,6 +476,7 @@ a { color: inherit; text-decoration: none; }
   .card-title { font-size: 17px; }
   .section-title { font-size: 26px; }
   .connect-ring { width: 260px; height: 260px; }
+  .connect-sub { max-width: 190px; }
   .connect-ring .pwr { width: 92px; height: 92px; }
   .node-row, .table-head, .field-label .t, .field-label .d, .btn { font-size: 15px; }
 }

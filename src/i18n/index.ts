@@ -5,6 +5,8 @@ const zh: Record<string, string> = {
   // 品牌 & 通用
   appName: 'AnTun',
   appTagline: '轻量 · 跨端 · 加密隧道',
+  // 圆环内副标题：空间只有约 150px，和侧栏 tagline 分开维护，避免长英文溢出圆环
+  ringIdle: '轻量 · 跨端 · 加密隧道',
   notice: '本软件开源免费，仅供学习交流使用，禁止售卖！',
   connect: '连接',
   disconnect: '断开',
@@ -15,7 +17,6 @@ const zh: Record<string, string> = {
   cancelPending: '正在收尾，请稍候…',
   connected: '已连接',
   disconnected: '未连接',
-  direct: '直连中',
   cancel: '取消',
   save: '保存',
   reset: '重置',
@@ -447,6 +448,8 @@ const zh: Record<string, string> = {
 const en: Record<string, string> = {
   appName: 'AnTun',
   appTagline: 'Lightweight · Cross-platform · Encrypted tunnel',
+  // 圆环内副标题：只放最短的卖点，完整版留在侧栏/关于页
+  ringIdle: 'Lightweight · Encrypted',
   notice: 'Open source & free, for learning only. Resale is prohibited!',
   connect: 'Connect',
   disconnect: 'Disconnect',
@@ -454,10 +457,9 @@ const en: Record<string, string> = {
   cancelling: 'Cancelling',
   cancelConnect: 'Cancel connection',
   cancelHint: 'click to cancel',
-  cancelPending: 'Stopping, please wait…',
+  cancelPending: 'Stopping…',
   connected: 'Connected',
   disconnected: 'Disconnected',
-  direct: 'Direct',
   cancel: 'Cancel',
   save: 'Save',
   reset: 'Reset',
@@ -585,7 +587,7 @@ const en: Record<string, string> = {
   psiphon: 'Psiphon exit',
   psiphonDesc: 'Route traffic through the Psiphon network instead of WARP (first start takes ~30s while it downloads the server list).',
   psiphonSubOnly: 'Unavailable in subscription mode — switch back to the WARP exit first',
-  psiphonStarting: 'Starting the Psiphon exit…',
+  psiphonStarting: 'Starting Psiphon…',
   psiphonFailed: 'Psiphon exit failed to start',
   psiphonDescConnected: 'Connected: toggling disconnects and reconnects with the new exit (the exit is written into the core config at connect time).',
   psiphonBusy: 'Connecting: wait for it to finish or cancel first, then switch the exit.',

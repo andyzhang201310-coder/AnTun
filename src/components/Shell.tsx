@@ -146,7 +146,9 @@ export function TopBar({ children, title, sub }: {
         <p className="section-notice">{t('notice')}</p>
       </div>
       <span className={`badge ${connected ? 'badge-green' : 'badge-gray'}`}>
-        <span className="dot" />{t(connected ? 'connected' : connecting ? 'connecting' : 'direct')}
+        {/* 未连接时统一显示「未连接」：WARP 直连模式下也不再用「直连中」，
+            那容易被读成「已经在连」 */}
+        <span className="dot" />{t(connected ? 'connected' : connecting ? 'connecting' : 'disconnected')}
       </span>
       <div className="topbar-controls">{children}</div>
     </header>
