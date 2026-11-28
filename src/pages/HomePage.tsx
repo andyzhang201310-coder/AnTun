@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, Server, AlertCircle, Check } from 'lucide-react'
 import { useStore, useLive } from '../store'
 import type { ColoRecord } from '../store'
-import { useEngine } from '../engine/useEngine'
+import { useEngine, waitForConnectIdle } from '../engine/useEngine'
 import { tr } from '../i18n'
 import { Card, Toggle, ProtocolSelect, FlagSelect, FieldRow, Stat, LatencyChart, RateChart, formatBytes, formatRate, formatDuration } from '../components/ui'
 import type { FlagOption } from '../components/ui'
@@ -11,7 +11,7 @@ import { regionName, codeFromNode, displayNodeName } from '../lib/region'
 
 export function HomePage() {
   const store = useStore()
-  const { settings, conn, endpoints, scanning, nodeTesting, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling } = store
+  const { settings, conn, endpoints, scanning, nodeTesting, pinnedId, subNodes, savedNodes, nodeStats, coloLog, cancelling, lastError } = store
   // 速率与延迟曲线来自独立的实时 store：只有首页订阅，连接时不会波及其他页面
   const { up, down, upRate, downRate, latencyPoints, ratePoints } = useLive()
   const { scan, probeSubNodes, connect, disconnect, cancel } = useEngine()
@@ -160,13 +160,42 @@ export function HomePage() {
    * 切换 Psiphon 出口。
    * 出口是在连接时写进核心配置的（render_config 里 PSIPHON 出站 + outbound: PSIPHON），
    * 核心跑起来之后改设置不会影响已建的隧道，所以已连接时必须断开重连才生效。
+   *
+   * 连接中也允许直接切：WARP 在当前网络不可达时，用户第一反应就是打开 Psiphon，
+   * 以前这个开关是灰的，必须先点圈取消、再点开关、再点圈连接 —— 三步还容易点空。
+   * 现在一次点击就完成「取消当前链路 → 等它收尾 → 按新设置重连」。
    */
   const togglePsiphon = async (v: boolean) => {
-    if (switching || conn.connecting) return
+    if (switching) return
     store.setSetting('psiphon', v)
     store.log('INFO', `psiphon -> ${v ? 'on' : 'off'}`)
     store.addHistory(`psiphon ${v ? 'on' : 'off'}`)
+    if (conn.connecting) {
+      if (cancelling) return
+      setSwitchNote(t('psiphonSwitching'))
+      setSwitching(true)
+      try {
+        await cancel()
+        // 取消只让 UI 复位，Rust 侧还在收尾；不等它释放会直接撞上重入锁（表现为点了没反应）
+        await waitForConnectIdle()
+        await connect()
+      } finally {
+        setSwitching(false)
+        setSwitchNote('')
+      }
+      return
+    }
     await reconnectIfNeeded(t('psiphonSwitching'))
+  }
+
+  /** 连接失败后的一键补救：改用 Psiphon 出口重连（失败原因常是本机到 Cloudflare 的 UDP 被阻断） */
+  const retryWithPsiphon = async () => {
+    if (switching || conn.connecting) return
+    store.setSetting('psiphon', true)
+    store.setLastError('')
+    store.log('INFO', 'retry with psiphon')
+    store.addHistory('retry with psiphon', false)
+    await connect()
   }
 
   const pickNode = async (value: string) => {
@@ -280,6 +309,25 @@ export function HomePage() {
                     ? (subNode ? t('subNodeActive') : t('modeSubscriptionDesc'))
                     : t('warpSelectHint')}
             </div>
+            {/* 上次连接失败的原因：留在首页而不是只写日志页，用户才知道下一步该做什么 */}
+            {!conn.connected && !conn.connecting && !!lastError && (
+              <div className="home-last-error">
+                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ wordBreak: 'break-word' }}>{lastError}</div>
+                  {settings.connMode === 'warp' && !settings.psiphon && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginTop: 4, paddingLeft: 0 }}
+                      disabled={switching}
+                      onClick={() => void retryWithPsiphon()}
+                    >
+                      {t('tryPsiphon')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {settings.connMode === 'subscription' && !subNodes.length && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--warn)', fontSize: 11.5 }}>
                 <AlertCircle size={13} />{t('subMissing')}
@@ -332,7 +380,7 @@ export function HomePage() {
                     : switching
                       ? t('psiphonSwitching')
                       : conn.connecting
-                        ? t('psiphonBusy')
+                        ? t('psiphonSwitchNow')
                         : conn.connected
                           ? t('psiphonDescConnected')
                           : t('psiphonDesc')
@@ -340,7 +388,7 @@ export function HomePage() {
                 control={
                   <Toggle
                     checked={settings.psiphon}
-                    disabled={settings.connMode === 'subscription' || conn.connecting || switching}
+                    disabled={settings.connMode === 'subscription' || switching}
                     onChange={(v) => void togglePsiphon(v)}
                   />
                 }

@@ -1,6 +1,6 @@
 [package]
 name = "antun"
-version = "1.7.6"
+version = "1.7.7"
 description = "AnTun - lightweight cross-platform WARP client"
 authors = ["AnTun"]
 edition = "2021"
@@ -30,7 +30,9 @@ windows-sys = { version = "0.61", features = ["Win32_Networking_WinInet", "Win32
 
 [profile.release]
 opt-level = "s"
-lto = true
-codegen-units = 1
+# thin LTO：fat LTO + codegen-units=1 在本机（15.5G 内存、pagefile 6.9G）会进入长时间换页，
+# 40 分钟拿不到产物。thin LTO 内存占用低、可并行，体积约 +1MB，性能差异可忽略。
+lto = "thin"
+codegen-units = 4
 panic = "abort"
 strip = true

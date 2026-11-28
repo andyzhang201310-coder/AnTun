@@ -3,14 +3,14 @@ import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, 
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
-import { useEngine } from '../engine/useEngine'
+import { useEngine, waitForConnectIdle } from '../engine/useEngine'
 import { parseWarpCredential } from '../engine/credential'
 import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport, CredentialInfo } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
   const { settings: s } = store
-  const { connect, disconnect } = useEngine()
+  const { connect, disconnect, cancel } = useEngine()
   const [psiphonBusy, setPsiphonBusy] = useState(false)
   const t = (k: string, vars?: Record<string, string | number>) => tr(k, s.lang, vars)
   const [warpText, setWarpText] = useState('')
@@ -87,13 +87,20 @@ export function SettingsPage() {
    * （与首页同一个判定，订阅模式下不可用——订阅节点自己出站）
    */
   const togglePsiphon = async (v: boolean) => {
-    if (psiphonBusy || store.conn.connecting || s.connMode === 'subscription') return
+    if (psiphonBusy || s.connMode === 'subscription') return
     store.setSetting('psiphon', v)
     store.log('INFO', `psiphon -> ${v ? 'on' : 'off'}`)
-    if (!store.conn.connected) return
+    // 连接中也允许切：先取消当前链路并等它收尾，再按新出口重连（与首页开关同一行为）
+    const conn = store.conn
+    if (!conn.connected && !conn.connecting) return
     setPsiphonBusy(true)
     try {
-      await disconnect()
+      if (conn.connecting) {
+        await cancel()
+        await waitForConnectIdle()
+      } else {
+        await disconnect()
+      }
       await connect()
     } finally {
       setPsiphonBusy(false)
@@ -344,12 +351,13 @@ export function SettingsPage() {
             s.connMode === 'subscription' ? t('psiphonSubOnly')
               : psiphonBusy ? t('psiphonSwitching')
                 : store.conn.connected ? t('psiphonDescConnected')
-                  : t('psiphonDesc')
+                  : store.conn.connecting ? t('psiphonSwitchNow')
+                    : t('psiphonDesc')
           }
           control={
             <Toggle
               checked={s.psiphon}
-              disabled={s.connMode === 'subscription' || psiphonBusy || store.conn.connecting}
+              disabled={s.connMode === 'subscription' || psiphonBusy}
               onChange={(v) => void togglePsiphon(v)}
             />
           }

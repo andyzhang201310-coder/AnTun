@@ -120,6 +120,12 @@ interface AppStore {
    */
   cancelling: boolean
   /**
+   * 上一次连接失败的原始原因。
+   * 之前错误只写进「日志」页，用户在首页只能看到圈一直转完又回到未连接，
+   * 不知道是凭证失效、端点不可达还是被网络阻断。现在留在首页提示区，并给出下一步动作。
+   */
+  lastError: string
+  /**
    * 节点页搜索词。只在本进程内保留：切页不丢（页面是条件渲染的），
    * 但不落盘 —— 否则下次开机打开节点页，列表是被过滤过的，容易以为端点没了。
    */
@@ -141,6 +147,7 @@ interface AppStore {
   setScanning: (b: boolean) => void
   setNodeTesting: (b: boolean) => void
   setCancelling: (b: boolean) => void
+  setLastError: (e: string) => void
   setNodeQuery: (q: string) => void
   setSavedQuery: (q: string) => void
   pinEndpoint: (id: string | null) => void
@@ -225,6 +232,7 @@ export const useStore = create<AppStore>()(
       scanning: false,
       nodeTesting: false,
       cancelling: false,
+      lastError: '',
       nodeQuery: '',
       savedQuery: '',
       rules: DEFAULT_RULES,
@@ -242,6 +250,7 @@ export const useStore = create<AppStore>()(
       setScanning: (scanning) => set({ scanning }),
       setNodeTesting: (nodeTesting) => set({ nodeTesting }),
       setCancelling: (cancelling) => set({ cancelling }),
+      setLastError: (lastError) => set({ lastError }),
       setNodeQuery: (nodeQuery) => set({ nodeQuery }),
       setSavedQuery: (savedQuery) => set({ savedQuery }),
       pinEndpoint: (pinnedId) => set({ pinnedId }),

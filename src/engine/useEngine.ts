@@ -49,6 +49,7 @@ async function engineDisconnect(): Promise<void> {
   }
   useStore.getState().setConn(CLEARED_CONN)
   useLive.getState().resetLive()
+  useStore.getState().setLastError('')
   ;(window as any)._antunSyncTray?.()
   s.log('INFO', 'disconnected')
   s.addHistory('disconnected')
@@ -145,6 +146,7 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
           })
         }
         useLive.getState().resetLive()
+        useStore.getState().setLastError('')
         ;(window as any)._antunSyncTray?.()
         adapter.probe((p) => useLive.getState().pushLatency(p))
         if (ep) {
@@ -172,9 +174,12 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
     if (wasCancelled) {
       s.log('INFO', 'connect cancelled by user')
       s.addHistory('connect cancelled', false)
+      useStore.getState().setLastError('')
     } else {
       s.log('ERROR', `connect failed: ${e.message}`)
       s.addHistory(`connect failed: ${e.message}`, false)
+      // 留在首页提示区：用户不必翻日志才知道为什么没连上
+      useStore.getState().setLastError(String(e.message || '连接失败'))
     }
     return false
   } finally {
@@ -205,7 +210,23 @@ async function engineCancel(): Promise<void> {
   }
 }
 
-async function handleTunnelLost(detail: string) {  const s = useStore.getState()
+/**
+ * 等上一次连接流程真正退出。
+ *
+ * 「取消」只让 UI 立刻回到未连接，Rust 侧那条链路还要几百毫秒收尾；
+ * 这期间直接再发起连接会被 in-flight 锁挡掉，表现出来就是「点了没反应」。
+ * 切换 Psiphon 时的「取消 → 立即重连」必须等这一步，否则新连接会被吞掉。
+ */
+export async function waitForConnectIdle(timeoutMs = 5000): Promise<boolean> {
+  const t0 = Date.now()
+  while (connectInFlight && Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => window.setTimeout(r, 80))
+  }
+  return !connectInFlight
+}
+
+async function handleTunnelLost(detail: string) {
+  const s = useStore.getState()
   s.log('WARN', `tunnel lost: ${detail}`)
   s.addHistory('tunnel lost', false)
   s.setConn(CLEARED_CONN)

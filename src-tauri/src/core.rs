@@ -1219,10 +1219,36 @@ fn attempt_connect(
 
     // 超时：停掉核心并返回真实原因，交由上层决定是否用内置凭证回退
     stop_child(state);
+    // 区分「隧道没建成」和「本机根本连不上 Cloudflare」。
+    // 前者在实测中几乎都是 UDP 出站被网络阻断（WARP 走 2408/QUIC），
+    // 此时唯一可行的出路是 Psiphon 出口，直接把这条建议写进错误里，
+    // 用户不用去翻日志猜。
+    let hint = if a.front_config.is_none() && !a.psiphon {
+        if probe_cloudflare_direct() {
+            "；本机可以访问 Cloudflare，但 WARP 隧道没有建立，多半是网络阻断了 WARP 的 UDP 出站。可开启 Psiphon 出口后重试"
+        } else {
+            "；本机无法访问 Cloudflare，请检查网络或 DNS"
+        }
+    } else {
+        ""
+    };
     Err(format!(
-        "连接超时：{}（请确认 WARP 凭证有效，且当前网络可访问 Cloudflare）",
-        last_err
+        "连接超时：{}{}（请确认 WARP 凭证有效，且当前网络可访问 Cloudflare）",
+        last_err, hint
     ))
+}
+
+/// 不经代理直连 Cloudflare trace，判断「本机能否访问 Cloudflare」。
+/// 只用于失败后的诊断：成功与否都不影响连接结果，所以任何异常都按不可达处理。
+fn probe_cloudflare_direct() -> bool {
+    hidden_command("curl.exe")
+        .args([
+            "-s", "-o", "NUL", "--max-time", "4",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// 通过本地代理真实探测出口（这是判断"已连接"的唯一依据）
