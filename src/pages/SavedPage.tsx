@@ -8,7 +8,8 @@ import { tr } from '../i18n'
 import { Card, formatRate } from '../components/ui'
 import { Flag } from '../components/Flag'
 import { codeFromNode, displayNodeName } from '../lib/region'
-import type { SavedNode, SubNode, NodeStat } from '../types'
+import { delayClass, speedClass } from '../lib/stat'
+import type { SavedNode, SubNode, NodeStat, Settings } from '../types'
 
 const desk = () => (window as any).AnTunDesktop as any
 
@@ -33,6 +34,9 @@ export function SavedPage() {
   // 搜索词放在 store 里：页面是条件渲染的，切页就会被卸载，组件内 state 会丢
   const query = store.savedQuery
   const setQuery = (v: string) => store.setSavedQuery(v)
+  // 排序同样不能放组件 state：切页回来会重置成默认顺序
+  const sortKey = settings.savedSort
+  const setSortKey = (v: Settings['savedSort']) => store.setSetting('savedSort', v)
 
   const [testing, setTesting] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
@@ -45,12 +49,22 @@ export function SavedPage() {
   const list = useMemo(() => {
     const q = query.trim().toLowerCase()
     const base = [...savedNodes].sort((a, b) => b.savedAt - a.savedAt)
-    if (!q) return base
-    return base.filter((n) =>
+    const filtered = !q ? base : base.filter((n) =>
       n.name.toLowerCase().includes(q)
       || n.server.toLowerCase().includes(q)
       || (n.note || '').toLowerCase().includes(q))
-  }, [savedNodes, query])
+    if (sortKey === 'default') return filtered
+    // 延迟排序：没测过的（delay<=0）永远沉到末尾，否则它们会被当成 0ms 排到最前
+    const dir = sortKey === 'delay-asc' ? 1 : -1
+    return filtered.sort((a, b) => {
+      const x = a.delay && a.delay > 0 ? a.delay : 0
+      const y = b.delay && b.delay > 0 ? b.delay : 0
+      if (!x && !y) return b.savedAt - a.savedAt
+      if (!x) return 1
+      if (!y) return -1
+      return dir * (x - y)
+    })
+  }, [savedNodes, query, sortKey])
 
   /** 订阅里还没收藏的节点，用于「从订阅导入」 */
   const importable = useMemo(() => {
@@ -183,6 +197,17 @@ export function SavedPage() {
           <button className="btn btn-ghost btn-sm" onClick={() => setImportOpen((v) => !v)}>
             <Download size={14} />{t('savedImport')}
           </button>
+          <select
+            className="select"
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value as Settings['savedSort'])}
+            title={t('sortBy')}
+            style={{ width: 148, flex: 'none' }}
+          >
+            <option value="default">{t('savedSortDefault')}</option>
+            <option value="delay-asc">{t('savedSortDelayAsc')}</option>
+            <option value="delay-desc">{t('savedSortDelayDesc')}</option>
+          </select>
           {sel.length > 0 && (
             <button className="btn btn-ghost btn-sm saved-del" onClick={removeSelected}>
               <Trash2 size={14} />{t('savedDeleteSel')}（{sel.length}）
@@ -289,11 +314,11 @@ export function SavedPage() {
                     </span>
                     <span className="cell muted">{n.nodeType.toUpperCase()}</span>
                     <span className="cell mono muted" title={`${n.server}:${n.port}`}>{n.server}:{n.port}</span>
-                    <span className="cell mono">
-                      {n.delay && n.delay > 0 ? `${n.delay} ms` : <span className="muted">—</span>}
+                    <span className={`cell mono node-stat ${delayClass(n.delay || 0)}`}>
+                      {n.delay && n.delay > 0 ? `${n.delay} ms` : '—'}
                     </span>
-                    <span className="cell mono">
-                      {n.speed && n.speed > 0 ? formatRate(n.speed) : <span className="muted">—</span>}
+                    <span className={`cell mono node-stat ${speedClass(n.speed || 0)}`}>
+                      {n.speed && n.speed > 0 ? formatRate(n.speed) : '—'}
                     </span>
                     <span className="saved-actions">
                       <button className="icon-btn" title={t('savedTestDelay')} disabled={busy} onClick={() => void runTest([n.id], false)}>

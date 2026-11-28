@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, AlertCircle, Check, MonitorSmartphone, AppWindow } from 'lucide-react'
+import { Power, Globe2, MapPin, Gauge, Radio, Star, RefreshCw, ArrowUpRight, ArrowDownRight, AlertCircle, Check, MonitorSmartphone, AppWindow, ShieldAlert } from 'lucide-react'
 import { useStore, useLive } from '../store'
 import type { ColoRecord } from '../store'
 import { useEngine, waitForConnectIdle } from '../engine/useEngine'
@@ -18,7 +18,31 @@ export function HomePage() {
   const [switching, setSwitching] = useState(false)
   /** 本次断开重连的原因（空 = 换节点），用于把提示文案说清楚 */
   const [switchNote, setSwitchNote] = useState('')
+  /**
+   * 握手计时：从点「连接」那一刻开始，连上后由会话时长接管。
+   * 连接中红框区域本来是空的，这里补一个 100ms 刷新的已用时间（1 秒粒度看不出在动）。
+   */
+  const [connectStart, setConnectStart] = useState<number | null>(null)
+  const [clock, setClock] = useState(() => Date.now())
+  /** 是否以管理员身份运行：只在桌面端有意义，TUN 全局模式的前提 */
+  const [elevated, setElevated] = useState(true)
   const t = (k: string, v?: Record<string, string | number>) => tr(k, settings.lang, v)
+
+  useEffect(() => {
+    const d = (window as any).AnTunDesktop
+    if (!d?.isDesktop || typeof d.isElevated !== 'function') return
+    void d.isElevated().then((v: boolean) => setElevated(!!v)).catch(() => { /* 查不到就按已提权处理 */ })
+  }, [])
+
+  useEffect(() => {
+    if (!conn.connecting) {
+      setConnectStart(null)
+      return
+    }
+    setConnectStart((v) => v ?? Date.now())
+    const id = window.setInterval(() => setClock(Date.now()), 100)
+    return () => window.clearInterval(id)
+  }, [conn.connecting])
 
   // 首页也需要候选端点：挂载后延迟一次真实探测，避免和首屏渲染抢资源
   useEffect(() => {
@@ -224,6 +248,25 @@ export function HomePage() {
     await connect()
   }
 
+  /**
+   * 以管理员身份重启（TUN 全局模式的前提）。
+   * 先断开并还原系统代理，再让 Rust 侧用 runas 拉起新实例并退出当前进程，
+   * 否则旧实例残留的代理设置会指向一个已经关掉的核心端口。
+   */
+  const restartAsAdmin = async () => {
+    const d = (window as any).AnTunDesktop
+    if (!d?.relaunchElevated) return
+    try {
+      if (conn.connected || conn.connecting) await disconnect()
+      store.log('INFO', 'relaunch as administrator')
+      await d.relaunchElevated()
+    } catch (e: any) {
+      const text = e?.message || String(e)
+      store.setLastError(text)
+      store.log('ERROR', `elevate failed: ${text}`)
+    }
+  }
+
   const pickNode = async (value: string) => {
     if (switching) return
     // 端点 id 形如 awg:162.159.192.1:2408，不能按 ':' 全拆，只切第一段
@@ -279,6 +322,12 @@ export function HomePage() {
                       ? `${settings.psiphon && settings.connMode === 'warp' ? t('psiphonStarting') + ' · ' : ''}${t('cancelHint')}`
                       : t('appTagline')}
               </div>
+              {/* 连接过程中显示「已用时间」，连上后这一行让位给会话时长（上面那行） */}
+              {conn.connecting && !cancelling && connectStart !== null && (
+                <div className="mono connect-elapsed" title={t('connectElapsed')}>
+                  {t('connectElapsed')} {((clock - connectStart) / 1000).toFixed(1)}s
+                </div>
+              )}
             </div>
           </div>
 
@@ -409,8 +458,18 @@ export function HomePage() {
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{t('connectOptions')}</div>
             <Card style={{ padding: '6px 16px' }}>
-              <FieldRow title={t('tunMode')} desc={t('tunModeDesc')}
-                control={<Toggle checked={settings.captureMode === 'tun'} onChange={(v) => store.setSetting('captureMode', v ? 'tun' : 'proxy')} />} />
+              <FieldRow title={t('tunMode')}
+                desc={settings.captureMode === 'tun' && !elevated ? t('tunNeedAdmin') : t('tunModeDesc')}
+                control={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {settings.captureMode === 'tun' && !elevated && (
+                      <button className="btn btn-primary btn-sm" onClick={() => void restartAsAdmin()}>
+                        <ShieldAlert size={13} />{t('restartAdmin')}
+                      </button>
+                    )}
+                    <Toggle checked={settings.captureMode === 'tun'} onChange={(v) => store.setSetting('captureMode', v ? 'tun' : 'proxy')} />
+                  </div>
+                } />
               <FieldRow title={t('rescan')} desc={t('rescanDesc')}
                 control={<Toggle checked={settings.rescan} onChange={(v) => store.setSetting('rescan', v)} />} />
               <FieldRow

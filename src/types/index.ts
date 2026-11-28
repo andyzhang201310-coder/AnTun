@@ -122,6 +122,8 @@ export interface Settings {
   subViaWarp: boolean
   /** 订阅节点列表排序（切页后保留，避免每次回来都被重置成默认顺序） */
   subSort: 'default' | 'delay' | 'speed'
+  /** 收藏节点列表排序：默认按收藏时间倒序，也可按延迟升/降序 */
+  savedSort: 'default' | 'delay-asc' | 'delay-desc'
   /** 节点页的协议过滤（同上：页面是条件渲染的，组件内 state 会被重置） */
   nodeProtoFilter: Protocol | 'all'
   /** 日志页当前分栏 */

@@ -1,6 +1,6 @@
 [package]
 name = "antun"
-version = "1.7.9"
+version = "1.8.1"
 description = "AnTun - lightweight cross-platform WARP client"
 authors = ["AnTun"]
 edition = "2021"
@@ -26,7 +26,16 @@ x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 boringtun = { version = "0.7", default-features = false }
 getrandom = "0.2"
 winreg = "0.56"
-windows-sys = { version = "0.61", features = ["Win32_Networking_WinInet", "Win32_Foundation", "Win32_System_JobObjects"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Networking_WinInet",
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    # TUN 提权判定（OpenProcessToken / GetTokenInformation）与提权重启（ShellExecuteW）
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 opt-level = "s"

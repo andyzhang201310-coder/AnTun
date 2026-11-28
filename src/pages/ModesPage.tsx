@@ -5,6 +5,7 @@ import { tr } from '../i18n'
 import { Card, Segment, Toggle, FieldRow, formatRate } from '../components/ui'
 import { Flag } from '../components/Flag'
 import { codeFromNode, displayNodeName } from '../lib/region'
+import { delayClass, speedClass } from '../lib/stat'
 import type { Subscription, SubNode, NodeStat } from '../types'
 
 export function ModesPage() {
@@ -150,9 +151,6 @@ export function ModesPage() {
     }
     return map[t2.toLowerCase()] || t2.toUpperCase()
   }
-
-  const delayClass = (v: number) => (v > 0 ? (v < 300 ? 'stat-good' : v < 800 ? 'stat-mid' : 'stat-bad') : 'stat-idle')
-  const speedClass = (v: number) => (v > 0 ? (v > 5 * 1024 * 1024 ? 'stat-good' : v > 1024 * 1024 ? 'stat-mid' : 'stat-bad') : 'stat-idle')
 
   const countFor = (id: string) => subNodes.filter((n) => n.subId === id).length
 

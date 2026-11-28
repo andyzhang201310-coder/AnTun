@@ -94,6 +94,17 @@ async function engineConnect(optsOverride?: Partial<ConnectOptions>): Promise<bo
   s.addHistory(`connect ${s.settings.proto}`)
   try {
     const adapter = ensureAdapter()
+    // TUN 全局模式要建虚拟网卡、改路由表：非提权时核心会静默失败（只打一行日志，
+    // 混合端口照常监听，出口探测照样通），所以这里先判权限，不做「看起来连上了」的假成功。
+    if (s.settings.captureMode === 'tun') {
+      const desk = (window as any).AnTunDesktop
+      if (desk?.isDesktop) {
+        const elevated = await desk.isElevated?.().catch(() => false)
+        if (!elevated) {
+          throw new Error('TUN 全局模式需要管理员权限：请点首页「以管理员身份重启」后再连接，或关闭 TUN 改回仅系统代理')
+        }
+      }
+    }
     const pinned = s.endpoints.find((e) => e.id === s.pinnedId) || null
     // 收藏节点也能作为前置：订阅刷新后 subNodes 会整体替换，收藏项必须独立兜底
     const frontNode = s.settings.connMode === 'subscription'

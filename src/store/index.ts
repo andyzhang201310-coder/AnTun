@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS: Settings = {
   subExit: 'node',
   subViaWarp: false,
   subSort: 'default',
+  savedSort: 'default',
   nodeProtoFilter: 'all',
   logsTab: 'runtime',
   proxyMode: 'custom',

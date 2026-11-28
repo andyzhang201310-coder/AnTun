@@ -129,6 +129,34 @@ export interface NetOptions {
   psiphon?: boolean
   /** Psiphon 出口地区，空为自动 */
   psiphonRegion?: string
+  /** 捕获模式：tun 会在核心配置里加 TUN 虚拟网卡（整机全局，需管理员权限） */
+  captureMode?: 'proxy' | 'tun'
+}
+
+/** 局域网共享状态（二维码内容就是这个 url） */
+export interface ShareInfo {
+  url: string
+  token: string
+  port: number
+  ips: string[]
+  /** 过期时间（Unix 秒） */
+  expiresAt: number
+  bytes: number
+  /** 被访问次数（下载页 + JSON 都算） */
+  hits: number
+}
+
+export interface ExportInfo {
+  path: string
+  size: number
+}
+
+export interface BackupFileInfo {
+  name: string
+  path: string
+  size: number
+  /** 修改时间（Unix 秒） */
+  modified: number
 }
 
 export interface DiagItem {
@@ -186,6 +214,19 @@ declare global {
       nodeTestDelay: () => Promise<NodeStat[]>
       nodeTestSpeed: (ids: string[], seconds?: number, concurrency?: number) => Promise<NodeStat[]>
       nodeTestStop: () => Promise<void>
+      // 备份与局域网同步
+      syncShareStart: (payload: string, ttlSecs?: number) => Promise<ShareInfo>
+      syncShareStop: () => Promise<void>
+      syncShareStatus: () => Promise<ShareInfo | null>
+      syncFetchUrl: (url: string) => Promise<string>
+      backupExport: (payload: string) => Promise<ExportInfo>
+      backupList: () => Promise<BackupFileInfo[]>
+      backupRead: (path: string) => Promise<string>
+      revealPath: (path: string) => Promise<void>
+      /** 当前是否以管理员身份运行（TUN 全局模式的前提） */
+      isElevated: () => Promise<boolean>
+      /** 以管理员身份重启本应用（会退出当前实例） */
+      relaunchElevated: () => Promise<void>
     }
     _antunSyncTray?: () => void
   }
@@ -237,6 +278,7 @@ export function initDesktopBridge() {
         subViaWarp: net?.subViaWarp ?? false,
         psiphon: net?.psiphon ?? false,
         psiphonRegion: net?.psiphonRegion ?? '',
+        captureMode: net?.captureMode ?? 'proxy',
       }),
     coreStop: () => invoke<void>('core_stop'),
     coreCancelConnect: () => invoke<void>('core_cancel_connect'),
@@ -258,5 +300,15 @@ export function initDesktopBridge() {
     nodeTestSpeed: (ids, seconds, concurrency) =>
       invoke<NodeStat[]>('node_test_speed', { ids, seconds, concurrency }),
     nodeTestStop: () => invoke<void>('node_test_stop'),
+    syncShareStart: (payload, ttlSecs) => invoke<ShareInfo>('sync_share_start', { payload, ttlSecs }),
+    syncShareStop: () => invoke<void>('sync_share_stop'),
+    syncShareStatus: () => invoke<ShareInfo | null>('sync_share_status'),
+    syncFetchUrl: (url) => invoke<string>('sync_fetch_url', { url }),
+    backupExport: (payload) => invoke<ExportInfo>('backup_export', { payload }),
+    backupList: () => invoke<BackupFileInfo[]>('backup_list'),
+    backupRead: (path) => invoke<string>('backup_read', { path }),
+    revealPath: (path) => invoke<void>('reveal_path', { path }),
+    isElevated: () => invoke<boolean>('elevated_status'),
+    relaunchElevated: () => invoke<void>('relaunch_elevated'),
   }
 }

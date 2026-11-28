@@ -168,6 +168,7 @@ export class DesktopAdapter implements EngineAdapter {
         subViaWarp: opts.settings.subViaWarp ?? false,
         psiphon: opts.psiphon ?? false,
         psiphonRegion: opts.settings.psiphonRegion ?? '',
+        captureMode: opts.settings.captureMode,
       },
       picked,
     ) as CoreResult

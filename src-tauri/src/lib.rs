@@ -6,6 +6,7 @@ mod net_diag;
 mod node_test;
 mod psiphon;
 mod subscription;
+mod sync;
 mod wg_handshake;
 
 use serde::Serialize;
@@ -102,6 +103,7 @@ pub fn run() {
         .manage(core::CoreState::default())
         .manage(node_test::NodeTestState::default())
         .manage(psiphon::PsiphonState::default())
+        .manage(sync::ShareState::default())
         .invoke_handler(tauri::generate_handler![
             set_autostart,
             get_autostart,
@@ -113,6 +115,8 @@ pub fn run() {
             core::core_connect,
             core::core_cancel_connect,
             core::core_stop,
+            core::elevated_status,
+            core::relaunch_elevated,
             core::core_status,
             core::core_traffic,
             core::core_connections,
@@ -131,7 +135,15 @@ pub fn run() {
             node_test::node_test_delay,
             node_test::node_test_speed,
             node_test::node_test_stop,
-            net_diag::net_diagnose
+            net_diag::net_diagnose,
+            sync::sync_share_start,
+            sync::sync_share_stop,
+            sync::sync_share_status,
+            sync::sync_fetch_url,
+            sync::backup_export,
+            sync::backup_list,
+            sync::backup_read,
+            sync::reveal_path
         ])
         .setup(|app| {
             // 上次异常退出若留下代理快照，先还原，避免系统代理指向已死的本地端口

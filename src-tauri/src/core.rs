@@ -27,6 +27,10 @@ const MIHOMO_VERSION: &str = "v1.19.34";
 const GH_PROXY: &str = "https://ghfast.top/";
 const GH_ORIGIN: &str = "https://github.com/MetaCubeX/mihomo/releases/download/";
 
+/// TUN 虚拟网卡名。固定成 ASCII 名字，才能在 `netsh interface show interface`
+/// 的输出里稳定找到它（系统自带的其它网卡名都是本地化的，不可靠）。
+const TUN_DEVICE: &str = "AnTun";
+
 #[derive(Default)]
 pub struct CoreState {
     child: Mutex<Option<Child>>,
@@ -311,6 +315,158 @@ fn restore_system_proxy(app: &AppHandle) -> Result<(), String> {
     refresh_proxy_settings();
     let _ = std::fs::remove_file(proxy_snapshot_path(app)?);
     Ok(())
+}
+
+// ============ TUN 全局模式 ============
+
+/// 当前进程是否以管理员身份运行。
+///
+/// TUN 要建 wintun 适配器、改路由表，非提权运行时 mihomo 会静默失败，所以连接前先问一次。
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut ret_len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut ret_len,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(windows))]
+pub fn is_elevated() -> bool {
+    true
+}
+
+/// TUN 网卡是否真的建立起来了。
+///
+/// 不能用「核心进程还活着」代替：非提权时 mihomo 只打一行
+/// `Start TUN listening error: Access is denied.`，混合端口照常监听，
+/// 于是出口探测（走 127.0.0.1 代理）依然成功 —— 用户会以为全局模式生效了，
+/// 实际上整机流量一点没进隧道。必须看网卡本身。
+#[cfg(windows)]
+fn tun_adapter_up() -> bool {
+    let out = match proxy_free_command("netsh")
+        .args(["interface", "show", "interface"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().any(|line| {
+        line.contains(TUN_DEVICE)
+            && (line.contains("Connected") || line.contains("已连接") || line.contains("已启用"))
+    })
+}
+
+#[cfg(not(windows))]
+fn tun_adapter_up() -> bool {
+    false
+}
+
+/// 等 TUN 网卡起来（mihomo 建适配器 + 下发路由通常 1~3 秒）
+fn wait_tun_adapter(timeout: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if tun_adapter_up() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    tun_adapter_up()
+}
+
+/// 确保 mihomo 找得到 wintun.dll。
+///
+/// mihomo 自己不内置这个驱动，运行时按「exe 所在目录 → 系统目录 → PATH」找 DLL。
+/// AnTun 不重打包 wintun（GPLv2 二进制，不随 MIT 项目分发），而是复用本机已有副本：
+/// 装了 Cloudflare WARP / WireGuard 的机器上一定有，复制一份到核心目录即可。
+fn ensure_wintun(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_dir(app)?;
+    let dst = dir.join("wintun.dll");
+    if dst.exists() {
+        return Ok(dst);
+    }
+    #[cfg(windows)]
+    {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Ok(base) = std::env::var(var) {
+                candidates.push(PathBuf::from(&base).join("Cloudflare").join("Cloudflare WARP").join("wintun.dll"));
+                candidates.push(PathBuf::from(&base).join("WireGuard").join("wintun.dll"));
+            }
+        }
+        if let Ok(sys) = std::env::var("SystemRoot") {
+            candidates.push(PathBuf::from(sys).join("System32").join("wintun.dll"));
+        }
+        for src in candidates {
+            if src.exists() {
+                std::fs::copy(&src, &dst).map_err(|e| format!("复制 wintun.dll 失败: {}", e))?;
+                return Ok(dst);
+            }
+        }
+    }
+    Err("TUN 需要 wintun.dll 驱动：本机没有找到（装了 Cloudflare WARP 或 WireGuard 的机器会自带）。请安装其一，或把 wintun.dll 放到数据目录后重试。".into())
+}
+
+/// 以管理员身份重启本应用。
+///
+/// TUN 模式必须提权才能建虚拟网卡。这里用 ShellExecuteW 的 runas 动词拉起同一份 exe，
+/// 然后退出当前实例（单实例锁会让新进程接管），前端不需要自己处理进程生命周期。
+#[tauri::command]
+pub fn relaunch_elevated(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let exe = std::env::current_exe().map_err(|e| format!("定位程序: {}", e))?;
+        let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+        let file: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let rc = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if (rc as isize) <= 32 {
+            return Err(format!("提权启动被拒绝（错误码 {}）", rc as isize));
+        }
+        app.exit(0);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("仅 Windows 支持以管理员身份重启".into())
+    }
+}
+
+#[tauri::command]
+pub fn elevated_status() -> bool {
+    is_elevated()
 }
 
 /// 上次异常退出留下的代理快照：启动时自动还原，避免指向已死掉的本地端口。
@@ -633,6 +789,7 @@ fn render_config(
     sub_exit: &str,
     sub_via_warp: bool,
     psiphon_socks_port: Option<u16>,
+    capture_mode: &str,
 ) -> String {
     let effective_mtu = if mtu > 0 { mtu } else { 1280 };
     let allow_lan_str = if allow_lan { "true" } else { "false" };
@@ -717,6 +874,27 @@ fn render_config(
         outbound = "PSIPHON";
     }
 
+    // TUN 全局模式：整机流量经虚拟网卡进核心，不受「应用是否遵守系统代理」影响。
+    //
+    // 两个必须注意的点：
+    // 1. 建 wintun 适配器、改路由表都要管理员权限。非提权时 mihomo 只会打一行
+    //    `Start TUN listening error: Access is denied.` 然后继续提供混合端口 ——
+    //    表面上"连上了"，实际没有任何流量进隧道。所以 attempt_connect 会真实检测
+    //    网卡是否建立（见 tun_adapter_up），起不来就直接判失败，不做静默降级。
+    // 2. dns 关闭时不劫持 53：否则所有查询都被塞进一个停用的解析器，等于把 DNS 掐死。
+    let tun_block = if capture_mode == "tun" {
+        let hijack = if dns_block.is_empty() {
+            String::new()
+        } else {
+            String::from("  dns-hijack:\n    - any:53\n")
+        };
+        format!(
+            "tun:\n  enable: true\n  device: {TUN_DEVICE}\n  stack: gvisor\n  auto-route: true\n  auto-detect-interface: true\n{hijack}"
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r#"# AnTun 自动生成的配置（请勿手动修改）· protocol={protocol}
 mixed-port: {port}
@@ -750,7 +928,7 @@ rules:
   - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
   - DOMAIN-SUFFIX,local,DIRECT
   - MATCH,PROXY
-"#,
+{tun_block}"#,
         protocol = protocol,
         port = port,
         api_port = api_port,
@@ -760,6 +938,7 @@ rules:
         proxies = proxies,
         outbound = outbound,
         allow_lan_str = allow_lan_str,
+        tun_block = tun_block,
     )
 }
 
@@ -1164,6 +1343,8 @@ struct ConnectArgs {
     psiphon: bool,
     /// Psiphon 出口地区（ISO alpha-2，空为自动）
     psiphon_region: String,
+    /// 捕获模式：proxy = 只设系统代理；tun = 另建 TUN 虚拟网卡做整机全局
+    capture_mode: String,
 }
 
 /// 真正建立连接：下载核心 → 写配置 → 启动 → 通过代理探测出口
@@ -1193,6 +1374,7 @@ pub async fn core_connect(
     endpoint_port: Option<u16>,
     psiphon: Option<bool>,
     psiphon_region: Option<String>,
+    capture_mode: Option<String>,
 ) -> Result<CoreResult, String> {
     let cred = fill_defaults(cred);
     let src = crate::credential::source_of(&cred).to_string();
@@ -1216,6 +1398,7 @@ pub async fn core_connect(
         endpoint_port: endpoint_port.filter(|p| *p > 0),
         psiphon: psiphon.unwrap_or(false),
         psiphon_region: psiphon_region.unwrap_or_default(),
+        capture_mode: capture_mode.unwrap_or_else(|| "proxy".into()),
     };
 
     // 连接全过程是同步阻塞的（起 Psiphon 进程、等隧道、起核心、轮询出口），
@@ -1324,6 +1507,15 @@ fn attempt_connect(
     stop_child(state);
     let _ = restore_system_proxy(app);
 
+    // 1.2 TUN 全局模式的前置条件：提权 + wintun 驱动。都在动手之前判掉，
+    // 免得已经拉起 Psiphon、写了一半配置才发现建不了网卡。
+    if a.capture_mode == "tun" {
+        if !is_elevated() {
+            return Err("TUN 全局模式需要管理员权限（要给网卡改路由表）。请用「以管理员身份重启」后再连接，或关闭 TUN 改回仅系统代理。".into());
+        }
+        ensure_wintun(app)?;
+    }
+
     // 1.5 Psiphon 出口：先把它拉起来拿到本地 SOCKS 端口，再渲染配置。
     // 首次启动要下载远程服务器列表（实测约 30 秒），所以用独立的长超时。
     // 失败一律清理（guard），避免留下一个占着端口的孤儿进程。
@@ -1370,6 +1562,7 @@ fn attempt_connect(
         &a.sub_exit,
         a.sub_via_warp,
         psiphon_port,
+        &a.capture_mode,
     );
     let cfg_path = config_path(app)?;
     std::fs::write(&cfg_path, &cfg).map_err(|e| format!("写配置: {}", e))?;
@@ -1403,6 +1596,17 @@ fn attempt_connect(
     }
     if let Ok(mut guard) = state.child.lock() {
         *guard = Some(child);
+    }
+
+    // 5.5 TUN 模式：等虚拟网卡真的建起来再进入出口探测。
+    // 网卡没建起来时「走 127.0.0.1 代理」照样能通（那是核心自己的出口），
+    // 所以绝不能拿出口探测成功去冒充「全局生效」——这正是这里单独判一次的原因。
+    if a.capture_mode == "tun" && !wait_tun_adapter(Duration::from_secs(12)) {
+        stop_child(state);
+        let _ = restore_system_proxy(app);
+        return Err(format!(
+            "TUN 网卡 {TUN_DEVICE} 未能建立：请确认以管理员身份运行；若缺 wintun.dll，安装 Cloudflare WARP 或 WireGuard 后重试。"
+        ));
     }
 
     // 6. 等待核心就绪 + 真实出口探测（轮询，直到成功或超时）
@@ -1646,6 +1850,10 @@ mod tests {
     use super::*;
 
     fn cfg_with(dns_mode: &str, guard: bool, sub_exit: &str, sub_via_warp: bool) -> String {
+        cfg_capture(dns_mode, guard, sub_exit, sub_via_warp, "proxy")
+    }
+
+    fn cfg_capture(dns_mode: &str, guard: bool, sub_exit: &str, sub_via_warp: bool, capture: &str) -> String {
         let cred = builtin_credential();
         let front = "  - name: \"SUB-NODE\"\n    type: ss\n    server: 1.2.3.4\n    port: 8388";
         render_config(
@@ -1663,7 +1871,32 @@ mod tests {
             sub_exit,
             sub_via_warp,
             None,
+            capture,
         )
+    }
+
+    #[test]
+    fn tun_mode_emits_real_adapter_config() {
+        let cfg = cfg_capture("preset", true, "warp", false, "tun");
+        assert!(cfg.contains("tun:\n  enable: true"));
+        assert!(cfg.contains("device: AnTun"));
+        assert!(cfg.contains("auto-route: true"));
+        // DNS 打开时劫持 53，交给核心内部解析器（否则会绕过 fake-ip 规则）
+        assert!(cfg.contains("dns-hijack:\n    - any:53"));
+    }
+
+    #[test]
+    fn proxy_mode_has_no_tun_block() {
+        let cfg = cfg_with("preset", true, "warp", false);
+        assert!(!cfg.contains("\ntun:"));
+    }
+
+    #[test]
+    fn tun_with_dns_off_skips_hijack() {
+        // DNS 关闭还劫持 53，会把所有查询塞进停用的解析器 —— 等于把 DNS 掐死
+        let cfg = cfg_capture("off", true, "warp", false, "tun");
+        assert!(cfg.contains("tun:\n  enable: true"));
+        assert!(!cfg.contains("dns-hijack"));
     }
 
     #[test]
@@ -1672,7 +1905,10 @@ mod tests {
         assert!(cfg.contains("enhanced-mode: fake-ip"));
         assert!(cfg.contains("https://1.1.1.1/dns-query"));
         assert!(cfg.contains("ipv6: false"));
-        assert!(cfg.contains("IP-CIDR,1.1.1.1/32,PROXY"));
+        // 解析器流量跟随隧道，不再给 1.1.1.1/8.8.8.8 放 IP-CIDR 直连例外：
+        // 在封锁 1.1.1.1 的网络里那样写会让 DoH 直接超时（1.7.8 已回退）
+        assert!(!cfg.contains("IP-CIDR,1.1.1.1/32,PROXY"));
+        assert!(!cfg.contains("IP-CIDR,8.8.8.8/32,PROXY"));
     }
 
     #[test]

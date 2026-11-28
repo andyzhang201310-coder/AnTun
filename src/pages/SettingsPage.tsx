@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
-import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, Download, RefreshCw, Activity, ShieldCheck } from 'lucide-react'
+import { Cpu, Route, Rocket, Database, RotateCcw, KeyRound, Check, AlertCircle, Download, RefreshCw, Activity, ShieldCheck, Share2, QrCode, Copy, FolderOpen, FileJson, Upload, ScanLine } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { useStore } from '../store'
 import { tr } from '../i18n'
 import { Card, Toggle, FieldRow, Segment, ProtocolPicker } from '../components/ui'
+import { QrScanDialog } from '../components/QrScanDialog'
 import { useEngine, waitForConnectIdle } from '../engine/useEngine'
 import { parseWarpCredential } from '../engine/credential'
-import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport, CredentialInfo } from '../desktop'
+import { buildBackup, backupBytes, applyBackup, extractUrl, formatBytes, type ImportMode } from '../backup'
+import type { CoreComponentStatus, CoreUpdateStatus, RegionOption, DiagReport, CredentialInfo, ShareInfo, BackupFileInfo } from '../desktop'
 
 export function SettingsPage() {
   const store = useStore()
@@ -33,6 +36,157 @@ export function SettingsPage() {
   const warpInPlay = !(s.connMode === 'subscription' && s.subExit === 'node' && !s.subViaWarp)
   const subNode = store.subNodes.find((n) => n.id === s.frontNodeId)
 
+  // ---- 备份与同步 ----
+  const [backupPaste, setBackupPaste] = useState('')
+  const [importMode, setImportMode] = useState<ImportMode>('merge')
+  const [backupMsg, setBackupMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [backupBusy, setBackupBusy] = useState<'export' | 'share' | 'import' | null>(null)
+  const [exported, setExported] = useState<{ path: string; size: number } | null>(null)
+  const [share, setShare] = useState<ShareInfo | null>(null)
+  const [shareLeft, setShareLeft] = useState(0)
+  const [files, setFiles] = useState<BackupFileInfo[] | null>(null)
+  const [scanOpen, setScanOpen] = useState(false)
+
+  /** 复制到剪贴板：WebView2 里 clipboard API 偶发被拒，退回 execCommand 兜底 */
+  const copyText = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch { /* 走兜底 */ }
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      return ok
+    } catch {
+      return false
+    }
+  }
+
+  const doExportFile = async () => {
+    if (!isDesk) return
+    setBackupBusy('export')
+    setBackupMsg(null)
+    try {
+      const info = await (window as any).AnTunDesktop.backupExport(buildBackup())
+      setExported(info)
+      setBackupMsg({ ok: true, text: `${t('backupSaved')} ${info.path}` })
+      store.log('INFO', `backup exported: ${info.size} bytes`)
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('backupExportFail', { msg: e?.message || e }) })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  const doCopyBackup = async () => {
+    const ok = await copyText(buildBackup())
+    setBackupMsg(ok ? { ok: true, text: t('backupCopied') } : { ok: false, text: t('backupCopyFail') })
+  }
+
+  const startShare = async () => {
+    if (!isDesk) {
+      setBackupMsg({ ok: false, text: t('syncNoDesk') })
+      return
+    }
+    setBackupBusy('share')
+    setBackupMsg(null)
+    try {
+      const payload = buildBackup()
+      const info: ShareInfo = await (window as any).AnTunDesktop.syncShareStart(payload, 600)
+      setShare(info)
+      setShareLeft(Math.max(0, info.expiresAt - Math.floor(Date.now() / 1000)))
+      store.log('INFO', `lan share started: ${info.url} (${backupBytes(payload)} bytes)`)
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('syncFailed', { msg: e?.message || e }) })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  const stopShare = async () => {
+    try {
+      await (window as any).AnTunDesktop.syncShareStop?.()
+      setShare(null)
+      store.log('INFO', 'lan share stopped')
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('syncStopFailed', { msg: e?.message || e }) })
+    }
+  }
+
+  const doImport = async (raw?: string) => {
+    const text = (raw ?? backupPaste).trim()
+    if (!text) {
+      setBackupMsg({ ok: false, text: t('backupEmpty') })
+      return
+    }
+    setBackupBusy('import')
+    setBackupMsg(null)
+    try {
+      let payload = text
+      // 不是 JSON 就当作局域网链接：二维码扫出来是链接，粘贴进来也走这条
+      if (!payload.startsWith('{')) {
+        const url = extractUrl(payload)
+        if (!url) throw new Error('内容不是备份 JSON，也没找到 http(s) 链接')
+        if (!isDesk) throw new Error(t('syncNoDesk'))
+        payload = await (window as any).AnTunDesktop.syncFetchUrl(url)
+      }
+      const r = applyBackup(payload, importMode)
+      const base = importMode === 'merge'
+        ? t('backupDoneMerge', { s: r.subscriptions, n: r.subNodes, f: r.savedNodes, r: r.rules })
+        : t('backupDoneReplace', { s: r.subscriptions, n: r.subNodes, f: r.savedNodes, r: r.rules, k: r.settingsApplied })
+      setBackupMsg({ ok: true, text: r.frontNodeFixed ? `${base} · ${t('backupFrontFixed')}` : base })
+      store.log('INFO', `backup imported (${importMode}): subs=${r.subscriptions} nodes=${r.subNodes} saved=${r.savedNodes} rules=${r.rules}`)
+      setBackupPaste('')
+      setFiles(null)
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('backupFail', { msg: e?.message || e }) })
+    } finally {
+      setBackupBusy(null)
+    }
+  }
+
+  const importFromFile = async (path: string) => {
+    try {
+      const text: string = await (window as any).AnTunDesktop.backupRead(path)
+      await doImport(text)
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('backupFail', { msg: e?.message || e }) })
+    }
+  }
+
+  const copyLink = async (url: string) => {
+    const ok = await copyText(url)
+    setBackupMsg(ok ? { ok: true, text: t('syncCopied') } : { ok: false, text: t('backupCopyFail') })
+  }
+
+  const loadFiles = async () => {
+    if (!isDesk) return
+    try {
+      const list: BackupFileInfo[] = await (window as any).AnTunDesktop.backupList()
+      setFiles(list)
+      if (!list.length) setBackupMsg({ ok: false, text: t('backupNoFiles') })
+    } catch (e: any) {
+      setBackupMsg({ ok: false, text: t('backupFail', { msg: e?.message || e }) })
+    }
+  }
+
+  /**
+   * 扫码结果只填进导入框，不直接执行：覆盖模式会整体替换设置，
+   * 必须由用户看清内容后自己点「导入」。
+   */
+  const onScanResult = (text: string) => {
+    setScanOpen(false)
+    setBackupPaste(text)
+    setBackupMsg({ ok: true, text: t('scanFound') })
+    store.log('INFO', `qr scanned: ${text.slice(0, 80)}`)
+  }
+
   const loadCoreStatus = async () => {
     const desk = (window as any).AnTunDesktop
     if (!isDesk || !desk?.coreUpdateStatus) return
@@ -55,6 +209,44 @@ export function SettingsPage() {
       if (v !== useStore.getState().settings.autoStart) store.setSetting('autoStart', v)
     }).catch(() => {})
   }, [isDesk])
+
+  /**
+   * 分享服务跑在 Rust 侧，切页不会中断（用户很可能切到别的页面去扫码）。
+   * 重新进入设置页时把仍在有效期内的分享恢复出来，避免「分享丢了」的错觉。
+   */
+  useEffect(() => {
+    if (!isDesk) return
+    const desk = (window as any).AnTunDesktop
+    desk.syncShareStatus?.()
+      .then((info: ShareInfo | null) => {
+        setShare(info)
+        if (info) setShareLeft(Math.max(0, info.expiresAt - Math.floor(Date.now() / 1000)))
+      })
+      .catch(() => {})
+  }, [isDesk])
+
+  useEffect(() => {
+    if (!share) return
+    const tick = () => {
+      const left = Math.max(0, share.expiresAt - Math.floor(Date.now() / 1000))
+      setShareLeft(left)
+      if (left === 0) setShare(null)
+    }
+    tick()
+    const timer = window.setInterval(tick, 1000)
+    return () => window.clearInterval(timer)
+  }, [share])
+
+  // 已下载次数每 3 秒回读一次；依赖只写 url，否则每次刷新都会重建定时器
+  useEffect(() => {
+    if (!share || !isDesk) return
+    const desk = (window as any).AnTunDesktop
+    const timer = window.setInterval(() => {
+      desk.syncShareStatus?.().then((info: ShareInfo | null) => setShare(info)).catch(() => {})
+    }, 3000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [share?.url, isDesk])
 
   const setAutoStart = async (enabled: boolean) => {
     store.setSetting('autoStart', enabled)
@@ -440,6 +632,132 @@ export function SettingsPage() {
             )}
           </div>
         )}
+      </Card>
+
+      {/* 备份与同步 */}
+      <Card title={<><Share2 size={16} />{t('backupTitle')}</>} sub={t('backupDesc')}>
+        <div className="backup-counts">
+          {t('backupSummary', {
+            s: store.subscriptions.length,
+            n: store.subNodes.length,
+            f: store.savedNodes.length,
+            r: store.rules.filter((x) => !x.builtin).length,
+          })}
+        </div>
+
+        <FieldRow
+          title={t('backupExport')}
+          desc={t('backupExportDesc')}
+          control={
+            <div className="backup-actions">
+              <button className="btn btn-outline btn-sm" disabled={!isDesk || backupBusy !== null} onClick={() => void doExportFile()}>
+                <Download size={14} />{t('backupSaveFile')}
+              </button>
+              <button className="btn btn-ghost btn-sm" disabled={backupBusy !== null} onClick={() => void doCopyBackup()}>
+                <Copy size={14} />{t('backupCopyText')}
+              </button>
+            </div>
+          }
+        />
+        {exported && (
+          <div className="backup-note">
+            <span className="mono backup-path" title={exported.path}>{exported.path}</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => void (window as any).AnTunDesktop?.revealPath?.(exported.path)}>
+              <FolderOpen size={13} />{t('backupReveal')}
+            </button>
+          </div>
+        )}
+
+        <FieldRow
+          title={t('syncShare')}
+          desc={t('syncShareDesc')}
+          control={
+            share
+              ? <button className="btn btn-outline btn-sm" onClick={() => void stopShare()}><QrCode size={14} />{t('syncStop')}</button>
+              : <button className="btn btn-outline btn-sm" disabled={!isDesk || backupBusy !== null} onClick={() => void startShare()}>
+                <QrCode size={14} />{t('syncStart')}
+              </button>
+          }
+        />
+        {share && (
+          <div className="qr-panel">
+            <div className="qr-box">
+              <QRCodeSVG value={share.url} size={168} level="M" bgColor="#ffffff" fgColor="#101114" />
+            </div>
+            <div className="qr-meta">
+              <div className="mono qr-url">{share.url}</div>
+              <div className="qr-line muted">
+                {t('syncRemain', { t: `${Math.floor(shareLeft / 60)}:${String(shareLeft % 60).padStart(2, '0')}` })}
+                {' · '}{t('syncHits', { n: share.hits })}
+                {' · '}{formatBytes(share.bytes)}
+              </div>
+              <div className="backup-actions">
+                <button className="btn btn-ghost btn-sm" onClick={() => void copyLink(share.url)}>
+                  <Copy size={13} />{t('syncCopyLink')}
+                </button>
+              </div>
+              {(share.ips.length === 0 || share.ips[0].startsWith('127.')) && (
+                <div className="qr-line" style={{ color: 'var(--danger)' }}>{t('syncIpWarn')}</div>
+              )}
+            </div>
+          </div>
+        )}
+        {!share && <div className="backup-hint muted">{t('syncSameLan')}</div>}
+
+        <div className="backup-import">
+          <div className="backup-import-head">
+            <span className="backup-import-title"><Upload size={14} />{t('backupImport')}</span>
+            <Segment
+              value={importMode}
+              onChange={(v) => setImportMode(v)}
+              options={[
+                { value: 'merge' as ImportMode, label: t('backupModeMerge') },
+                { value: 'replace' as ImportMode, label: t('backupModeReplace') },
+              ]}
+            />
+          </div>
+          <div className="backup-hint muted">
+            {t(importMode === 'merge' ? 'backupModeMergeHint' : 'backupModeReplaceHint')}
+          </div>
+          <textarea
+            className="input backup-textarea"
+            value={backupPaste}
+            spellCheck={false}
+            placeholder={t('backupPaste')}
+            onChange={(e) => setBackupPaste(e.target.value)}
+          />
+          <div className="backup-actions">
+            <button className="btn btn-primary btn-sm" disabled={backupBusy !== null} onClick={() => void doImport()}>
+              {backupBusy === 'import' ? t('backupImporting') : t('backupDoImport')}
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={() => setScanOpen(true)}>
+              <ScanLine size={14} />{t('scanOpen')}
+            </button>
+            <button className="btn btn-ghost btn-sm" disabled={backupBusy !== null} onClick={() => void loadFiles()}>
+              <FolderOpen size={14} />{t('backupPickFile')}
+            </button>
+          </div>
+          {files && files.length > 0 && (
+            <div className="backup-files">
+              {files.map((f) => (
+                <button key={f.path} className="backup-file" title={f.path} onClick={() => void importFromFile(f.path)}>
+                  <FileJson size={13} />
+                  <span className="mono backup-file-name">{f.name}</span>
+                  <span className="muted">{formatBytes(f.size)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {backupMsg && (
+          <div className="backup-msg" style={{ color: backupMsg.ok ? 'var(--success)' : 'var(--danger)' }}>
+            {backupMsg.ok ? <Check size={14} /> : <AlertCircle size={14} />}
+            <span>{backupMsg.text}</span>
+          </div>
+        )}
+        <div className="backup-hint muted">{t('backupLocalOnly')}</div>
+        {scanOpen && <QrScanDialog onClose={() => setScanOpen(false)} onResult={onScanResult} />}
       </Card>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
